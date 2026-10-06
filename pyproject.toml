@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalcore"
+version = "0.1.0"
+description = "Backend-agnostic evaluation harness: grid, runner, cluster bootstrap, plots"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Julia Steinberg" }]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["numpy", "pandas", "scipy", "matplotlib"]
+
+[project.optional-dependencies]
+http = ["httpx"]
+hf = ["torch", "transformers"]
+retrieval = ["faiss-cpu"]
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.setuptools.packages.find]
+include = ["evalcore*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF", "BLE", "PIE", "PL", "ANN"]
+ignore = [
+    "PLR0913",  # many arguments: analysis entry points take keyword options
+    "PLR2004",  # magic values: tests compare against literal expected values
+    "PLR0912",  # branch count
+    "PLR0915",  # statement count
+    "PLC0415",  # import inside function: torch and httpx stay optional
+    "PLR0917",  # positional-argument count
+    "ANN401",   # Any is sometimes the honest type (model outputs, user payloads)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]       # test helpers: types are local and obvious
+"examples/**" = ["ANN"]
+"scripts/**" = ["ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["evalcore"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["evalcore"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# libraries that ship no type information
+module = ["pandas.*", "scipy.*", "matplotlib.*", "transformers.*", "faiss.*", "torch.*"]
+ignore_missing_imports = true
