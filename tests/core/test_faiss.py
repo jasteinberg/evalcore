@@ -1,18 +1,25 @@
-"""Approximate indexes, measured against the exact one.  Run in a process
-without torch: see test_search.test_faiss_tests_pass_in_a_process_without_torch."""
+"""Approximate indexes, measured against the exact one.  Where faiss and
+torch cannot share a process (pip wheels on macOS, search.omp_clash) this
+file skips and test_search runs it in a fresh interpreter instead;
+everywhere else it runs here."""
 
 from __future__ import annotations
-
-import sys
 
 import numpy as np
 import pytest
 
 from evalcore.core.embed import FunctionEmbedder
-from evalcore.core.search import DenseRetriever, ExactIndex, FaissIndex, ann_recall
+from evalcore.core.search import (
+    DenseRetriever,
+    ExactIndex,
+    FaissIndex,
+    ann_recall,
+    omp_clash,
+)
 
-if "torch" in sys.modules:
-    pytest.skip("torch is loaded; run in a fresh process", allow_module_level=True)
+if omp_clash() is not None:
+    pytest.skip("faiss cannot load beside torch here; test_search runs this "
+                "file in a fresh process", allow_module_level=True)
 faiss = pytest.importorskip("faiss")
 
 
