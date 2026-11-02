@@ -110,6 +110,7 @@ def test_d16_corpus_lines_are_strict(tmp_path, lines, bad):
 
 def test_a_task_the_backend_cannot_serve_fails_before_any_spend(tmp_path,
                                                                monkeypatch):
+    pytest.importorskip("httpx")              # an http backend is built
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     with pytest.raises(ValueError, match="cannot teacher-force"):
         from_config(cfg(tmp_path, task={"type": "arithmetic", "n_items": 4},
@@ -355,6 +356,7 @@ def test_a_dense_retriever_from_config(tmp_path, monkeypatch):
 
 
 def test_the_search_section_chooses_the_agent_tool(tmp_path, monkeypatch):
+    pytest.importorskip("httpx")              # an http backend is built
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     base = cfg(tmp_path, task={"type": "search_qa", "n_towns": 4},
                backend={"type": "http", "flavour": "anthropic",

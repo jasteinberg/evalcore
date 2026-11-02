@@ -30,5 +30,6 @@ def test_model_is_required_and_never_defaulted():
 
 
 def test_no_key_exits_2(monkeypatch):
+    pytest.importorskip("httpx")                  # main() builds the backend
     monkeypatch.delenv(HTTPBackend.ENV["openai"], raising=False)
     assert preflight.main(["--provider", "openai", "--model", "m"]) == 2

@@ -333,14 +333,14 @@ class HFBackend(Backend):
                     self._slots[dst] = None
                 else:
                     cache = copy.deepcopy(stored[1])     # the source slot stays
-                cache.crop(n)
+                _crop(cache, n)
                 self._touch(src)
             fed = {**model_in, "past_key_values": cache}
             if feed_tail:
                 fed["input_ids"] = model_in["input_ids"][:, n:]
             yield fed, n, src
             if len(ids) > 1:
-                cache.crop(len(ids) - 1)
+                _crop(cache, len(ids) - 1)
                 self._slots[dst] = (ids[:-1], cache)
                 self._touch(dst)
 
@@ -739,6 +739,19 @@ class HFBackend(Backend):
                                "truncated": c,
                                **self._reuse_meta(n_reused, slot)})
                 for r, t, e, c in zip(reqs, texts, extras, cut, strict=True)]
+
+
+def _crop(cache: Any, n: int) -> None:
+    """Cut `cache` to its first n positions.  The call is spelled the way
+    every supported transformers reads alike: a negative count of positions
+    to drop (5.x refuses a positive length, and 4.x reads crop(0) as "keep
+    nothing"), and no call when there is nothing to drop."""
+    drop = cache.get_seq_length() - n
+    if drop < 0:
+        raise ValueError(f"cannot crop a cache of {cache.get_seq_length()} "
+                         f"positions to {n}")
+    if drop:
+        cache.crop(-drop)
 
 
 def _by_group(reqs: Sequence[Request], keys: Sequence[Any],
