@@ -20,7 +20,8 @@ dependencies = ["numpy", "pandas", "scipy", "matplotlib"]
 
 [project.optional-dependencies]
 http = ["httpx"]
-hf = ["torch", "transformers"]
+# floor = the oldest transformers CI tests (the "full" job's matrix); no cap
+hf = ["torch", "transformers>=4.57"]
 retrieval = ["faiss-cpu"]
 dev = ["pytest", "ruff", "mypy"]
 
