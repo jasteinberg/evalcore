@@ -29,6 +29,9 @@ include = ["evalcore*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "golden: compares with a stored snapshot in tests/golden/ (regenerate: make snapshots)",
+]
 
 [tool.ruff]
 line-length = 88

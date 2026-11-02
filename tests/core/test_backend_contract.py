@@ -147,6 +147,27 @@ def test_a_backends_own_refusal_is_an_error_row_and_never_a_call(tmp_path):
     assert df.loc["b", "error"] == "fatal: ShortOnly takes prompts under 10 characters"
 
 
+@pytest.mark.parametrize("field", ["input_ids", "candidates"])
+def test_a28_logit_requests_to_an_incapable_backend_never_call_it(tmp_path,
+                                                                  field):
+    """A28. EchoBackend cannot read logits.  Expected: an error row whose
+    message names the field, and zero calls to its function (counted)."""
+    calls = []
+
+    def fn(req):
+        calls.append(req.unit_id)
+        return "x"
+
+    df = execute(units(grid({"a": [1]}), [Item("q", {})]), EchoBackend(fn),
+                 lambda u: Request(u.id, MSG, {}, **{field: [1, 2]}),
+                 lambda u, r: {}, tmp_path / "r.jsonl", workers=1,
+                 stream=io.StringIO())
+    row = df.iloc[0]
+    assert row["status"] == "error"
+    assert field in row["error"] and "supports_target" in row["error"]
+    assert calls == []
+
+
 def test_an_experiment_refuses_a_task_its_backend_refuses(tmp_path):
     from evalcore import Experiment, Task
     task = Task("long", [Item("a", {"messages": [{"role": "user",

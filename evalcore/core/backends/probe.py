@@ -15,6 +15,18 @@ using `enc` (which says the padding side, and per row `last` -- the final
 real position -- or `n_prompt`).  That is what makes capture batch-safe:
 nothing assumes row 0, or that the last column is a real token.
 
+Under `HFBackend(prefix_cache=True)` the first forward is fed only the
+uncached tail of the prompt.  `enc` still describes the FULL prompt
+(input_ids and attention_mask cover cached + fed positions), and
+`enc["n_prefix_reused"][k]` says how many leading positions were not fed,
+so full position p is hook index p - n_prefix_reused[k] on the first
+forward, and the read position (the last prompt token) is always the last
+fed index.  `enc["n_prefix_reused"]` is present on every path (zeros
+without reuse), so one probe works either way.  A probe may patch the
+read position and generated tokens, never an earlier fed position: those
+are stored for reuse by later calls.  HFBackend._probing has the full
+key-by-key contract.
+
 `identity()` is abstract because what a probe captures is part of what a
 cached response contains: a changed probe must not be served old arrays.
 Arrays returned by `collect` go to the run's sidecar store
@@ -26,6 +38,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+
+from .base import qualified_name
 
 __all__ = ["FunctionProbe", "Probe"]
 
@@ -64,9 +78,7 @@ class FunctionProbe(Probe):
         self.fn = fn
 
     def identity(self) -> dict[str, Any]:
-        fn = self.fn
-        return {"function": f"{getattr(fn, '__module__', '?')}."
-                           f"{getattr(fn, '__qualname__', type(fn).__qualname__)}"}
+        return {"function": qualified_name(self.fn)}
 
     def collect(self, out: Any, enc: Mapping[str, Any],
                 reqs: Sequence[Any]) -> list[dict[str, Any]]:

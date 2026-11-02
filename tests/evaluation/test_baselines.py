@@ -29,11 +29,6 @@ def test_majority_dominates_prior_matched_dominates_nothing():
     assert majority_rate(["a"] * 4) == pytest.approx(1.0)
 
 
-def test_empty_labels_raise():
-    with pytest.raises(ValueError):
-        majority_rate([])
-
-
 def test_floors_sorted_strongest_first_and_custom_is_ranked_with_them():
     labels = ["a"] * 70 + ["b"] * 30
     df = floors(labels, custom={"stated_reference": 0.55})
@@ -74,11 +69,10 @@ def test_headroom_refuses_to_rank_across_scales():
         headroom(1.692, mixed, higher_is_better=False)
 
 
-def test_floors_needs_something_to_work_from():
+def test_nothing_to_compute_from_is_refused():
+    with pytest.raises(ValueError, match="no labels"):
+        majority_rate([])
     with pytest.raises(ValueError, match="needs labels"):
         floors()
-
-
-def test_headroom_needs_floors():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="no floors"):
         headroom(0.5, pd.DataFrame(columns=["floor", "value"]))

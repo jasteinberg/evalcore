@@ -20,11 +20,33 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 
 def canonical(obj: Any) -> str:
     """Stable JSON: sorted keys, no whitespace, no NaN."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"),
-                      allow_nan=False, default=str)
+                      allow_nan=False, default=_identity_of)
+
+
+def _identity_of(o: Any) -> Any:
+    """`default=` for `canonical`: what a non-JSON value contributes.
+
+    An array is hashed by its bytes, dtype and shape.  Its `str`, the
+    previous fallback, is numpy's print form, which summarises an array of
+    more than 1000 elements to its first and last three entries and keeps
+    8 significant digits: zeros(2000) and a unit vector e_500 printed (and
+    so hashed) alike.  A torch tensor goes the same way through `.numpy()`
+    (duck-typed: no torch import here).  Every other value keeps its `str`,
+    so ids of cells without arrays are unchanged."""
+    if hasattr(o, "detach") and hasattr(o, "numpy"):
+        o = o.detach().cpu().numpy()
+    if isinstance(o, np.ndarray):
+        a = np.ascontiguousarray(o)
+        return {"ndarray": {"dtype": a.dtype.str, "shape": list(a.shape),
+                            "blake2b": hashlib.blake2b(a.tobytes(),
+                                                       digest_size=16).hexdigest()}}
+    return str(o)
 
 
 def digest(obj: Any, n: int = 16) -> str:
@@ -50,10 +72,7 @@ class Cell:
 
     def merged(self) -> dict[str, Any]:
         """Flat dict for the tidy frame: params first, tags cannot shadow."""
-        out = dict(self.tags)
-        out.update(self.params)
-        out["cell_id"] = self.id
-        return out
+        return {**self.tags, **self.params, "cell_id": self.id}
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"Cell({self.id[:8]}, {canonical(dict(self.params))})"
@@ -64,7 +83,8 @@ def grid(axes: Mapping[str, Sequence[Any]],
          tags: Mapping[str, Any] | None = None) -> list[Cell]:
     """Cartesian product of `axes`, minus any cell matching an `exclude`
     pattern (a partial dict; a cell is dropped if it matches on every key
-    the pattern names).
+    the pattern names).  A pattern naming a key that is not an axis is
+    refused.
 
     >>> len(grid({"model": ["a", "b"], "temp": [0.0, 1.0]}))
     4
@@ -72,7 +92,15 @@ def grid(axes: Mapping[str, Sequence[Any]],
     ...          exclude=[{"model": "a", "temp": 1.0}]))
     3
     """
-    keys = list(axes)
+    keys, exclude = list(axes), list(exclude)
+    for pat in exclude:
+        unknown = sorted(set(pat) - set(keys))
+        if unknown:
+            # such a pattern can never match, so the cell it was meant to
+            # drop (a typo'd axis name) would silently stay in the sweep
+            raise ValueError(f"exclude pattern {dict(pat)!r} names "
+                             f"{unknown}, which are not axes of the grid "
+                             f"(axes: {keys})")
     cells: list[Cell] = []
     for combo in itertools.product(*(axes[k] for k in keys)):
         params = dict(zip(keys, combo, strict=True))

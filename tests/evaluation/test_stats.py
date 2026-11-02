@@ -1,11 +1,21 @@
-"""Calibration tests.  A CI routine that is never checked against a known
-generating process is decoration; these check coverage."""
+"""Calibration tests, hand-computed cases and invariances of the cluster
+statistics.  A CI routine that is never checked against a known generating
+process is decoration; the coverage tests check that.  The rest take their
+expected values from closed forms (exact fractions where possible), tiny
+hand-computed tables, or two paths that must agree; a row of the invariant
+catalogue (C1, C2, ...) is named first in its docstring, and a newly found
+violation lands as a strict xfail that must fail, for the stated reason,
+until the defect is fixed."""
+
+import warnings
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from evalcore import (
+    attrition,
     benjamini_hochberg,
     cluster_bootstrap,
     effective_n,
@@ -14,6 +24,18 @@ from evalcore import (
     paired_bootstrap,
     wilson_interval,
 )
+from evalcore.evaluation.stats import (
+    SMALL_K_COVERAGE,
+    BootResult,
+    cell_caveats,
+    mcnemar_exact,
+    paired_pvalue,
+    summarize,
+)
+from evalcore.testing import assert_same
+
+# small fixtures by design; the caveats themselves are tested below
+tiny = pytest.mark.filterwarnings("ignore:.*carry caveats:RuntimeWarning")
 
 
 def clustered(k=60, m=5, s2_a=0.6, s2_e=0.4, mu=0.0, rng=None):
@@ -24,6 +46,23 @@ def clustered(k=60, m=5, s2_a=0.6, s2_e=0.4, mu=0.0, rng=None):
     x = mu + a[:, None] + e
     return pd.DataFrame({"cluster": np.repeat(np.arange(k), m),
                          "y": x.ravel()})
+
+
+def unbalanced(sizes, seed=0):
+    """Rows y_ij = a_i + e_ij, sd(e) = 0.5, for clusters of the given
+    sizes, arm "a".  (Draws a_i then that cluster's e_ij, cluster by
+    cluster, which `clustered` cannot do for unequal sizes.)"""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i, m in enumerate(sizes):
+        a = rng.normal()
+        rows += [{"arm": "a", "cluster": f"c{i:03d}", "y": a + rng.normal(0, .5)}
+                 for _ in range(m)]
+    return pd.DataFrame(rows)
+
+
+def _ci(res):
+    return {"point": res.point, "lo": res.lo, "hi": res.hi, "se": res.se}
 
 
 def test_icc_recovers_rho():
@@ -207,13 +246,6 @@ def test_no_replication_gives_deff_one():
 
 # --- caveats: correct numbers that are not to be read at face value ------------
 
-from evalcore.evaluation.stats import (  # noqa: E402
-    SMALL_K_COVERAGE,
-    cell_caveats,
-    summarize,
-)
-
-
 def frame_of(k, m=4, const=False, missing=0, seed=0):
     rng = np.random.default_rng(seed)
     df = clustered(k=k, m=m, rng=rng)
@@ -267,3 +299,308 @@ def test_the_quoted_undercoverage_is_what_the_bootstrap_does():
     assert abs(hits / R - SMALL_K_COVERAGE[5]) < 0.07
     assert cell_caveats({"n_clusters": 30, "se": 0.1, "n_rows": 10,
                          "n_excluded": 0}) == []
+
+
+# --- accounting: every row and every cluster is counted somewhere -------------
+
+def test_c2_unpaired_clusters_are_counted_and_named_in_a_warning():
+    """C2.  10 shared clusters (one row per arm each: 20 rows) plus 2 seen
+    only by arm a and 1 seen only by arm b.  The difference is taken on the
+    10 shared clusters, so n_clusters = 10, n_rows = 20, n_unpaired = 3 and
+    the warning names 3.  A balanced frame has n_unpaired = 0 and no
+    warning."""
+    rows = [{"cluster": f"c{i}", "arm": arm, "y": float(i + (arm == "a"))}
+            for i in range(10) for arm in ("a", "b")]
+    balanced = pd.DataFrame(rows)
+    rows += [{"cluster": f"u{i}", "arm": "a", "y": 0.0} for i in range(2)]
+    rows += [{"cluster": "v0", "arm": "b", "y": 0.0}]
+    with pytest.warns(RuntimeWarning, match=r"^3 cluster\(s\) seen by only one"):
+        res = paired_bootstrap(pd.DataFrame(rows), "y", "arm", "a", "b",
+                               n_boot=200)
+    assert (res.n_unpaired, res.n_rows, res.n_clusters) == (3, 20, 10)
+    assert res.point == 1.0                      # every D_i = (i + 1) - i
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ok = paired_bootstrap(balanced, "y", "arm", "a", "b", n_boot=200)
+    assert ok.n_unpaired == 0
+
+
+def test_c1_a_row_without_a_cluster_is_refused_by_every_bootstrap():
+    """C1.  A row with a value and no cluster label cannot enter the
+    bootstrap, and dropping it would leave it in neither n_rows nor
+    n_excluded.  3 of 20 rows carry a value and no cluster:
+    cluster_bootstrap, paired_bootstrap and summarize all refuse, naming
+    the count; a row with neither value nor cluster is only an excluded
+    row and passes."""
+    df = pd.DataFrame({"cluster": [f"c{i // 2}" for i in range(20)],
+                       "arm": ["a", "b"] * 10, "y": np.arange(20.0)})
+    bad = df.copy()
+    bad.loc[[0, 5, 9], "cluster"] = None
+    for call in (lambda d: cluster_bootstrap(d, "y", n_boot=50),
+                 lambda d: paired_bootstrap(d, "y", "arm", "a", "b", n_boot=50),
+                 lambda d: summarize(d, "y", ["arm"], n_boot=50)):
+        with pytest.raises(ValueError, match=r"^3 row"):
+            call(bad)
+    fine = df.copy()
+    fine.loc[[0], ["cluster", "y"]] = None
+    assert cluster_bootstrap(fine, "y", n_boot=50).n_rows == 19
+
+
+def test_c3_attrition_refuses_an_unknown_status():
+    """C3.  Statuses are ok / unparsed / truncated / tool_error / error.  A
+    row with status "refused" belongs to none of the six states, so
+    attrition must refuse it, with and without a manifest."""
+    df = pd.DataFrame({"unit_id": ["u0", "u1"], "arm": ["a", "a"],
+                       "status": ["ok", "refused"]})
+    plan = df[["unit_id", "arm"]]
+    with pytest.raises(ValueError):
+        attrition(df, ["arm"])
+    with pytest.raises(ValueError):
+        attrition(df, ["arm"], manifest=plan)
+
+
+# --- the estimator: unweighted mean of cluster means --------------------------
+
+@tiny
+def test_c4_duplicating_rows_within_a_cluster_changes_nothing():
+    """C4.  theta = (1/k) sum_i xbar_i depends on each cluster only through
+    its mean, and the bootstrap resamples cluster labels, so repeating a
+    cluster's rows leaves the point, the replicates and so the interval
+    unchanged.  Tiny case: {c0: [0], c1: [1]} and {c0: [0, 0, 0], c1: [1]}
+    both give theta = (0 + 1)/2 = 1/2 (the row mean would give 1/4).
+    Larger case: dyadic values (multiples of 1/8), so every sum is exact and
+    the two paths must agree to the bit (tolerance 0)."""
+    tiny = pd.DataFrame({"cluster": ["c0", "c1"], "y": [0.0, 1.0]})
+    dup = pd.DataFrame({"cluster": ["c0"] * 3 + ["c1"], "y": [0.0] * 3 + [1.0]})
+    assert cluster_bootstrap(tiny, "y", n_boot=200).point == 0.5
+    assert cluster_bootstrap(dup, "y", n_boot=200).point == 0.5
+
+    rng = np.random.default_rng(4)
+    base = pd.DataFrame({"arm": "a",
+                         "cluster": np.repeat([f"c{i:02d}" for i in range(24)], 2),
+                         "y": rng.integers(0, 8, size=48) / 8})
+    heavy = base[base.cluster.isin(["c00", "c03", "c07", "c11", "c19"])]
+    more = pd.concat([base, heavy, heavy], ignore_index=True)   # x3 each
+    theta = sum(Fraction(float(g.mean())) for _, g in base.groupby("cluster").y) / 24
+    a = cluster_bootstrap(base, "y", n_boot=2000, seed=3)
+    b = cluster_bootstrap(more, "y", n_boot=2000, seed=3)
+    assert a.point == float(theta)
+    assert_same(_ci(b), _ci(a), what="duplicated vs original")
+    sa = summarize(base, "y", ["arm"], n_boot=2000, seed=3)
+    sb = summarize(more, "y", ["arm"], n_boot=2000, seed=3)
+    cols = ["point", "lo", "hi", "se", "n_clusters"]
+    assert_same(sb[cols], sa[cols], what="summarize duplicated vs original")
+
+
+def test_c7_paired_bootstrap_refuses_an_unknown_method():
+    """C7.  cluster_bootstrap refuses method="bogus"; the paired form must
+    too, or a typo silently changes the interval."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"cluster": np.repeat(np.arange(10), 2),
+                       "arm": ["a", "b"] * 10, "y": rng.normal(size=20)})
+    with pytest.raises(ValueError, match="bogus"):
+        paired_bootstrap(df, "y", "arm", "a", "b", n_boot=100, method="bogus")
+
+
+# --- ICC(1), m0, DEFF, n_eff ----------------------------------------------------
+
+def test_c12_unbalanced_design_effect_by_hand():
+    """C12.  Clusters [1], [0, 2], [4, 4, 7]: m = (1, 2, 3), k = 3, N = 6.
+
+        means 1, 1, 5;  grand mean (1 + 2 + 15)/6 = 3
+        MS_b = [1(1-3)^2 + 2(1-3)^2 + 3(5-3)^2] / (k-1) = (4 + 8 + 12)/2 = 12
+        SS_w = (0-1)^2 + (2-1)^2 + 2(4-5)^2 + (7-5)^2 = 8,  MS_w = 8/3
+        m0   = (N - sum m^2 / N)/(k-1) = (6 - 14/6)/2 = 11/6
+        s2_a = (12 - 8/3)/(11/6) = 56/11
+        rho  = (56/11)/(56/11 + 8/3) = 21/32
+        DEFF = 1 + (11/6 - 1)(21/32) = 99/64,   n_eff = 6/(99/64) = 128/33.
+
+    The naive m = N/k = 2 would give DEFF = 1 + 21/32 = 53/32 instead.
+    Tolerance 1e-12 relative: a few float operations on O(10) numbers."""
+    df = pd.DataFrame({"cluster": ["a", "b", "b", "c", "c", "c"],
+                       "y": [1.0, 0, 2, 4, 4, 7]})
+    o = effective_n(df, "y")
+    expect = {"k": 3, "N": 6, "ms_between": 12.0, "ms_within": float(Fraction(8, 3)),
+              "m0": float(Fraction(11, 6)), "rho": float(Fraction(21, 32)),
+              "deff": float(Fraction(99, 64)), "n_eff": float(Fraction(128, 33))}
+    assert_same({key: o[key] for key in expect}, expect, rtol=1e-12)
+
+
+def test_c13_negative_between_variance_is_clipped():
+    """C13.  Clusters [0, 2], [0, 2]: means 1, 1, so MS_b = 0;
+    MS_w = 4 (1^2)/(N - k) = 4/2 = 2; m0 = (4 - 8/4)/1 = 2;
+    s2_a = (0 - 2)/2 = -1 < 0.  The moment estimate is negative, so rho is
+    clipped to 0, DEFF = 1 and n_eff = N = 4 (unclipped: rho = -1,
+    DEFF = 0, n_eff infinite).  Exact: every quantity is a small integer."""
+    df = pd.DataFrame({"cluster": ["a", "a", "b", "b"], "y": [0.0, 2, 0, 2]})
+    o = effective_n(df, "y")
+    assert_same({key: o[key] for key in ("ms_between", "ms_within", "m0", "rho",
+                                         "deff", "n_eff")},
+                {"ms_between": 0.0, "ms_within": 2.0, "m0": 2.0, "rho": 0.0,
+                 "deff": 1.0, "n_eff": 4.0})
+
+
+# --- BCa ----------------------------------------------------------------------
+
+def test_c15_bca_shifts_up_for_right_skewed_cluster_means():
+    """C15.  For theta = mean, the leave-one-out values are
+    theta_(i) = (k xbar - x_i)/(k - 1), so jbar - theta_(i) = (x_i - xbar)/(k-1)
+    and the acceleration is the sample skewness over 6 sqrt(k):
+
+        a = sum (x_i - xbar)^3 / (6 [sum (x_i - xbar)^2]^{3/2}).
+
+    Lognormal(0, 1.5) cluster means are right-skewed, so a > 0 (asserted
+    here from the closed form).  With a > 0 the adjusted level
+    z0 + (z0 + z)/(1 - a(z0 + z)) exceeds z0 + z at both z = -1.96 and
+    z = +1.96, and z0 > 0 for a right-skewed mean pushes the same way, so
+    both BCa bounds lie above the percentile bounds (same replicates).  With
+    the sign of a flipped, the 1/(1 - a(.)) factor shrinks the upper level
+    and stretches the lower one, putting both bounds below.  Margins at this
+    seed are ~0.1 and ~0.2 against a Monte Carlo jitter of the bounds of
+    ~0.01 at B = 4000."""
+    x = np.random.default_rng(11).lognormal(0, 1.5, 30)
+    d = x - x.mean()
+    assert (d ** 3).sum() / (6 * (d ** 2).sum() ** 1.5) > 0.05
+    df = pd.DataFrame({"cluster": np.arange(30), "y": x})
+    p = cluster_bootstrap(df, "y", n_boot=4000, seed=0, method="percentile")
+    b = cluster_bootstrap(df, "y", n_boot=4000, seed=0, method="bca")
+    assert b.lo > p.lo and b.hi > p.hi
+
+
+# --- floors: summarize attaches them; the verdict uses the interval -------------
+
+def _frame(rate: float, n_items: int = 120, seed: int = 0) -> pd.DataFrame:
+    """One arm, `rate` correct, labels 70/30 so majority = 0.70."""
+    rng = np.random.default_rng(seed)
+    labels = ["a"] * int(0.7 * n_items) + ["b"] * (n_items - int(0.7 * n_items))
+    return pd.DataFrame({
+        "arm": "m",
+        "cluster": [f"i{i}" for i in range(n_items)],
+        "label": labels,
+        "score": rng.binomial(1, rate, n_items).astype(float),
+    })
+
+
+def test_no_floor_args_leaves_the_table_unchanged():
+    df = _frame(0.8)
+    out = summarize(df, "score", ["arm"], n_boot=200)
+    assert not any(c.startswith(("binding_floor", "above_floor"))
+                   for c in out.columns)
+
+
+def test_floor_columns_appear_and_bind_to_the_strongest():
+    df = _frame(0.9)
+    out = summarize(df, "score", ["arm"], n_boot=500, label="label",
+                    floor={"stated_reference": 0.55})
+    row = out.iloc[0]
+    assert row["binding_floor"] == "majority"        # 0.70 beats the stated 0.55
+    assert row["floor_value"] == pytest.approx(0.70)
+    assert row["headroom"] == pytest.approx(row["point"] - 0.70)
+
+
+def test_verdict_uses_the_interval_not_the_point():
+    """A cell just above its floor by the point estimate, with an interval
+    that straddles it, must not be called above the floor."""
+    df = _frame(0.72, n_items=40, seed=3)
+    out = summarize(df, "score", ["arm"], n_boot=800, label="label")
+    row = out.iloc[0]
+    assert row["point"] > row["floor_value"]         # point clears it
+    assert row["lo"] < row["floor_value"]            # interval does not
+    assert bool(row["above_floor_ci"]) is False   # numpy bool_ in a frame
+
+
+def test_clearly_above_floor_is_reported_as_such():
+    df = _frame(0.97, n_items=200, seed=1)
+    out = summarize(df, "score", ["arm"], n_boot=800, label="label")
+    assert bool(out.iloc[0]["above_floor_ci"]) is True
+
+
+@tiny
+def test_supplied_only_floors_on_a_loss_scale():
+    df = _frame(0.5)
+    df["loss"] = 1.692
+    out = summarize(df, "loss", ["arm"], n_boot=200,
+                    floor={"trigram": 1.784, "stated": 1.90},
+                    floor_units="nats", higher_is_better=False)
+    row = out.iloc[0]
+    assert row["binding_floor"] == "trigram"
+    assert row["headroom"] == pytest.approx(0.092, abs=1e-6)
+
+
+@tiny
+def test_c16_loss_floor_verdict_uses_the_upper_bound():
+    """C16.  For a loss (lower is better) the cell beats a floor F only if
+    its whole interval is below F, i.e. hi < F.  Losses 0..29 / 10 over 30
+    clusters: point = 1.45 exactly, interval width ~0.6 (se = sd/sqrt(30)
+    ~ 0.16).  F = point + 1e-6 sits inside (point, hi) because hi - point
+    is ~0.3, far beyond 1e-6: the point beats F, the interval does not, so
+    the verdict is False.  F = 10 is above every value, hence above hi:
+    True."""
+    df = pd.DataFrame({"arm": "a", "cluster": [f"c{i}" for i in range(30)],
+                       "loss": np.arange(30) / 10})
+    kw = {"n_boot": 2000, "floor_units": "nats", "higher_is_better": False}
+    straddle = summarize(df, "loss", ["arm"], floor={"ref": 1.45 + 1e-6},
+                         **kw).iloc[0]
+    assert straddle["point"] == pytest.approx(1.45, abs=1e-12)
+    assert straddle["point"] < 1.45 + 1e-6 < straddle["hi"]
+    assert bool(straddle["above_floor_ci"]) is False
+    clear = summarize(df, "loss", ["arm"], floor={"ref": 10.0}, **kw).iloc[0]
+    assert bool(clear["above_floor_ci"]) is True
+
+
+# --- p-values -------------------------------------------------------------------
+
+def test_c32_two_sided_p_values_by_hand():
+    """C32.  Bootstrap inversion: replicates 5 x (-1) and 95 x (+1) give
+    P(D* <= 0) = 0.05 and P(D* >= 0) = 0.95, so p = 2 min = 0.10; the
+    mirror image gives the same.  Exact McNemar: (b, c) = (0, 6) gives
+    2 P(X <= 0 | n = 6, 1/2) = 2/64 = 0.03125; (3, 3) gives
+    2 P(X <= 3) = 2 (1 + 6 + 15 + 20)/64 = 84/64, capped at 1."""
+    def boot(reps):
+        return BootResult(0.0, 0.0, 0.0, 0.0, 1, 1, replicates=np.array(reps))
+    assert paired_pvalue(boot([-1.0] * 5 + [1.0] * 95)) == pytest.approx(0.10)
+    assert paired_pvalue(boot([1.0] * 5 + [-1.0] * 95)) == pytest.approx(0.10)
+    assert mcnemar_exact(0, 6) == pytest.approx(float(Fraction(1, 32)), rel=1e-12)
+    assert mcnemar_exact(6, 0) == pytest.approx(float(Fraction(1, 32)), rel=1e-12)
+    assert mcnemar_exact(3, 3) == 1.0
+
+
+# --- invariances of the tables ------------------------------------------------------
+
+@tiny
+def test_c34_row_order_does_not_change_any_estimate():
+    """C34.  Every estimator is a function of the multiset of (cluster,
+    value) rows; the row order carries no information.  Shuffled vs
+    original through cluster_bootstrap, paired_bootstrap, effective_n and
+    summarize, same seed.  Tolerance 1e-12 relative: within-cluster sums
+    run in a different order (rounding ~1e-16 per term)."""
+    rng = np.random.default_rng(2)
+    df = unbalanced(rng.integers(1, 5, size=30), seed=2)
+    df = pd.concat([df, df.assign(arm="b", y=df.y + rng.normal(0.2, .3, len(df)))],
+                   ignore_index=True)
+    shuf = df.sample(frac=1.0, random_state=9).reset_index(drop=True)
+    a = df[df.arm == "a"]
+    sa = shuf[shuf.arm == "a"]
+    assert_same(_ci(cluster_bootstrap(sa, "y", n_boot=1000, seed=1)),
+                _ci(cluster_bootstrap(a, "y", n_boot=1000, seed=1)), rtol=1e-12)
+    assert_same(_ci(paired_bootstrap(shuf, "y", "arm", "a", "b", n_boot=1000)),
+                _ci(paired_bootstrap(df, "y", "arm", "a", "b", n_boot=1000)),
+                rtol=1e-12)
+    assert_same(effective_n(sa, "y"), effective_n(a, "y"), rtol=1e-12)
+    assert_same(summarize(shuf, "y", ["arm"], n_boot=1000),
+                summarize(df, "y", ["arm"], n_boot=1000), rtol=1e-12)
+
+
+@tiny
+def test_c35_summarize_keeps_a_cell_with_a_missing_key():
+    """C35.  Two cells, arm "a" and arm missing (None).  The missing-key
+    cell is a cell of the grid, not noise: 2 output rows, and the
+    missing-arm row's point is the mean of its cluster means, here
+    (1 + 3)/2 = 2 exactly."""
+    df = pd.DataFrame({"arm": ["a", "a", None, None, None],
+                       "cluster": ["c0", "c1", "c2", "c2", "c3"],
+                       "y": [0.0, 1.0, 0.0, 2.0, 3.0]})
+    out = summarize(df, "y", ["arm"], n_boot=200)
+    assert len(out) == 2
+    miss = out[out["arm"].isna()]
+    assert len(miss) == 1 and miss["point"].iloc[0] == 2.0

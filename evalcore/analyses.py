@@ -48,8 +48,12 @@ class AnalysisContext:
 Analysis: TypeAlias = Callable[[pd.DataFrame, AnalysisContext], Tables]
 
 
-def _ok(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame[frame["status"] == "ok"] if "status" in frame else frame
+def _require_status(frame: pd.DataFrame) -> None:
+    """Only ok rows carry scores.  A frame with no `status` column cannot
+    say which rows those are, so it is refused rather than used whole."""
+    if "status" not in frame:
+        raise KeyError("frame has no 'status' column, so its ok rows are "
+                       "unknown; pass the runner's frame (to_frame / execute)")
 
 
 def attrition_table() -> Analysis:
@@ -84,9 +88,14 @@ def retrieval_table(metrics: Sequence[str] | None = None,
 def _per_group(frame: pd.DataFrame, ctx: AnalysisContext, x: str,
                fit: Callable[[pd.DataFrame], AxisCurves]) -> Tables:
     """Curves along grid axis `x`, one set per combination of the other
-    axes, stacked with those axes as columns."""
+    axes, stacked with those axes as columns.  The frame goes in whole:
+    the curve functions keep the ok rows themselves and count an item with
+    no ok row at some x (even at every x) in `n_dropped`, which the peak
+    table carries beside `n_items`.  Filtering here first would hide an
+    item that failed everywhere."""
     if x not in ctx.by:
         raise ValueError(f"curves: {x!r} is not a grid axis ({ctx.by})")
+    _require_status(frame)
     rest = [a for a in ctx.by if a != x]
     groups = frame.groupby(rest, sort=True) if rest else [((), frame)]
     tables: list[pd.DataFrame] = []
@@ -96,7 +105,8 @@ def _per_group(frame: pd.DataFrame, ctx: AnalysisContext, x: str,
         labels = dict(zip(rest, key if isinstance(key, tuple) else (key,),
                           strict=True))
         tables.append(res.table.assign(**labels))
-        peaks.append(res.peak.assign(**labels,
+        peaks.append(res.peak.assign(**labels, n_items=res.n_items,
+                                     n_dropped=res.n_dropped,
                                      caveats="; ".join(res.caveats)))
     return {"table": pd.concat(tables, ignore_index=True),
             "peak": pd.concat(peaks, ignore_index=True)}
@@ -107,7 +117,7 @@ def value_curve(x: str, value: str, levels: Sequence[float] = (),
     """`value` along grid axis `x` with chi, its peak and level crossings
     (evaluation.value_curves), per combination of the other axes."""
     def run(frame: pd.DataFrame, ctx: AnalysisContext) -> Tables:
-        return _per_group(_ok(frame), ctx, x, lambda d: value_curves(
+        return _per_group(frame, ctx, x, lambda d: value_curves(
             d, x, value, levels=levels, **curve_kw))
     return run
 
@@ -116,7 +126,7 @@ def axis_curve(x: str, **curve_kw: Any) -> Analysis:
     """Teacher-forced accuracy along grid axis `x` with its composition
     (evaluation.axis_curves), per combination of the other axes."""
     def run(frame: pd.DataFrame, ctx: AnalysisContext) -> Tables:
-        return _per_group(_ok(frame), ctx, x, lambda d: axis_curves(
+        return _per_group(frame, ctx, x, lambda d: axis_curves(
             d, x, **curve_kw))
     return run
 

@@ -4,6 +4,8 @@ with a known curve -- never from running the estimator."""
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,21 +18,32 @@ from evalcore import (
     subsampled_sharpness,
     susceptibility,
 )
-from evalcore.evaluation.curves import MAX_CENSORED_SHARE
+from evalcore.evaluation.curves import (
+    MAX_CENSORED_SHARE,
+    crossing,
+    value_curves,
+    value_data,
+)
+from evalcore.testing import assert_same
 
 pytestmark = pytest.mark.filterwarnings(
     # small fixtures by design; the caveats themselves are tested at the end
     "ignore:curves carry caveats:RuntimeWarning")
 
 
-def frame(ok_by_x: dict[float, list[list[int]]], cluster=None) -> pd.DataFrame:
-    """Run-frame rows: one per (item, x), per-token correctness as lists."""
+def frame(ok_by_x: dict[float, list[list[int]]], cluster=None,
+          status=None) -> pd.DataFrame:
+    """Run-frame rows: one per (item, x), per-token correctness as lists.
+    `status` maps an item index to a non-ok status at every x."""
     rows = []
     for x, oks in ok_by_x.items():
         for i, ok in enumerate(oks):
+            st = (status or {}).get(i, "ok")
             rows.append({"x": x, "item_id": f"i{i}",
                          "cluster": cluster[i] if cluster else f"i{i}",
-                         "status": "ok", "meta_argmax_ok": list(map(bool, ok)),
+                         "status": st,
+                         "meta_argmax_ok": list(map(bool, ok)) if st == "ok"
+                         else None,
                          "meta_n_target": len(ok)})
     return pd.DataFrame(rows)
 
@@ -95,7 +108,8 @@ def test_susceptibility_is_exact_for_a_curve_linear_in_log_x():
     x = np.array([1e7, 3e7, 2e8, 5e8, 4e9])           # non-uniform in log x
     A = 0.05 * np.log(x) - 0.3
     assert susceptibility(x, A) == pytest.approx(np.full(5, 0.05))
-    assert susceptibility(x, np.vstack([A, 2 * A])).shape == (2, 5)
+    assert susceptibility(x, np.vstack([A, 2 * A])) == pytest.approx(
+        np.repeat([[0.05], [0.10]], 5, axis=1))          # row by row
 
 
 CENTRE = np.log(1e9)
@@ -221,15 +235,23 @@ def test_subsampled_sharpness_shrinks_its_spread_with_m():
 
 
 def test_explode_tokens():
+    """Lists explode together with a per-unit position; ndarray cells (a
+    parquet round trip) and a repeated index (a concat of frames) give the
+    same positions."""
     df = pd.DataFrame({"unit_id": ["a", "b"], "meta_logp": [[-0.1, -2.0], [-0.5]],
                        "meta_argmax_ok": [[True, False], [True]]})
     t = explode_tokens(df)
     assert t[["unit_id", "position"]].values.tolist() == [["a", 0], ["a", 1],
                                                           ["b", 0]]
     assert t["meta_logp"].tolist() == [-0.1, -2.0, -0.5]
+    arr = pd.DataFrame({"unit_id": ["a", "b"],
+                        "meta_argmax_ok": [np.array([True, False]),
+                                           np.array([True])]})
+    both = pd.concat([arr, arr.assign(unit_id=["c", "d"])])  # repeated index
+    assert explode_tokens(both)["position"].tolist() == [0, 1, 0, 0, 1, 0]
 
 
-# --- review findings (2 Oct) -------------------------------------------------
+# --- input validation -----------------------------------------------------------
 
 def test_axis_values_must_be_numeric():
     f = frame({1.0: HAND, 2.0: HAND})
@@ -260,15 +282,6 @@ def test_missing_cluster_labels_are_refused():
         axis_data(f, "x")
 
 
-def test_explode_tokens_after_round_trip_and_concat():
-    df = pd.DataFrame({"unit_id": ["a", "b"],
-                       "meta_argmax_ok": [np.array([True, False]),
-                                          np.array([True])]})
-    both = pd.concat([df, df.assign(unit_id=["c", "d"])])    # repeated index
-    t = explode_tokens(both)
-    assert t["position"].tolist() == [0, 1, 0, 0, 1, 0]
-
-
 def test_a_peak_on_the_grid_edge_is_flagged():
     """chi at an end point is a one-sided difference, twice the centred one
     for a single jump, so an edge peak is an artefact of the grid."""
@@ -278,9 +291,6 @@ def test_a_peak_on_the_grid_edge_is_flagged():
 
 
 # --- curves of any per-item value ----------------------------------------------
-
-from evalcore.evaluation.curves import crossing, value_curves  # noqa: E402
-
 
 def test_crossing_is_exact_on_a_line_in_log_x():
     x = np.array([1.0, 10.0, 100.0, 1000.0])
@@ -294,9 +304,13 @@ def test_crossing_is_exact_on_a_line_in_log_x():
     assert both[0] == pytest.approx(10 ** 1.5) and np.isnan(both[1])
 
 
-def vframe(V, xs, cluster=None):
-    return pd.DataFrame([{"x": x, "item_id": f"i{i}", "status": "ok",
-                          "cluster": cluster[i] if cluster else f"i{i}",
+def vframe(V, xs, items=None, cluster=None, status=None):
+    """Per-item value rows: V is (items, n_x).  `status` maps an item
+    index to a non-ok status at every x."""
+    items = items or [f"i{i}" for i in range(V.shape[0])]
+    return pd.DataFrame([{"x": x, "item_id": items[i],
+                          "cluster": cluster[i] if cluster else items[i],
+                          "status": (status or {}).get(i, "ok"),
                           "v": V[i, j]}
                          for i in range(V.shape[0]) for j, x in enumerate(xs)])
 
@@ -329,16 +343,6 @@ def test_crossing_interval_covers_the_population_crossing():
     assert 0.90 <= hits / R <= 0.99, f"crossing coverage {hits / R:.3f}"
 
 
-def test_censored_replicates_are_counted_not_hidden():
-    xs = [1.0, 10.0, 100.0]
-    rng = np.random.default_rng(0)
-    V = np.array([-0.05, 0.0, 0.05])[None, :] + rng.normal(0, 0.3, (30, 3))
-    pk = value_curves(vframe(V, xs), "x", "v", levels=[0.0],
-                      n_boot=400).peak.set_index("quantity")
-    share = pk.loc["crossing_0_censored", "lo"]
-    assert 0.0 < share < 1.0                    # some replicates never cross
-
-
 def test_missing_values_drop_the_item_everywhere_and_say_so():
     xs = [1.0, 10.0]
     V = np.array([[1.0, 2.0], [3.0, np.nan], [5.0, 6.0]])
@@ -359,7 +363,6 @@ def sigmoid_frame(k: int, seed: int = 0, noise: float = 0.1) -> pd.DataFrame:
 
 
 def test_a_well_resolved_curve_carries_no_caveats():
-    import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         res = value_curves(sigmoid_frame(60), "x", "v", levels=[0.5],
@@ -374,14 +377,16 @@ def test_few_items_behind_a_curve_are_flagged():
     assert any(c.startswith("only 8 clusters") for c in res.caveats)
 
 
-def test_a_censored_crossing_is_flagged_with_its_measured_share():
+def test_a_censored_crossing_is_counted_and_flagged_with_its_share():
+    """Replicates that never cross are counted, not hidden: the share is
+    reported, and above MAX_CENSORED_SHARE it becomes a caveat."""
     xs = [1.0, 10.0, 100.0]
     rng = np.random.default_rng(0)
     V = np.array([-0.05, 0.0, 0.05])[None, :] + rng.normal(0, 0.3, (30, 3))
     with pytest.warns(RuntimeWarning):
         res = value_curves(vframe(V, xs), "x", "v", levels=[0.0], n_boot=400)
     share = res.peak.set_index("quantity").loc["crossing_0_censored", "lo"]
-    assert share > MAX_CENSORED_SHARE
+    assert MAX_CENSORED_SHARE < share < 1.0     # some replicates do cross
     assert f"crossing_0: {share:.0%} of replicates never cross" in \
         "; ".join(res.caveats)
 
@@ -401,3 +406,103 @@ def test_a_peak_at_the_grid_edge_is_flagged():
     with pytest.warns(RuntimeWarning):
         res = value_curves(vframe(V, xs), "x", "v", n_boot=100)
     assert any(c.startswith("chi peaks at an end") for c in res.caveats)
+
+
+# --- invariants: accounting, cluster resampling, exact cases ----------------------
+
+@pytest.mark.filterwarnings("ignore:.*items are not scored:RuntimeWarning")
+def test_c6_an_item_failing_everywhere_is_counted():
+    """C6.  Four items at x = 1, 2; item i3 is an error row at both points.
+    It is planned and absent from the paired analysis, exactly like an item
+    missing at one point, so n_dropped = 1 (three items analysed)."""
+    oks = [[1], [0], [1, 1], [1, 0]]
+    tf = frame({1.0: oks, 2.0: oks}, status={3: "error"})
+    assert len(axis_data(tf, "x").items) == 3
+    assert axis_data(tf, "x").n_dropped == 1
+    V = np.array([[0.0, 1], [1, 2], [2, 3], [3, 4]])
+    vd = value_data(vframe(V, [1.0, 2.0], status={3: "error"}), "x", "v")
+    assert vd.n_dropped == 1
+
+
+def test_c22_value_curves_resample_whole_clusters():
+    """C22.  Duplicate every item into two rows of one cluster (ids c000a,
+    c000b in cluster c000).  The cluster means, and so the mean curve, are
+    unchanged; a bootstrap over the 150 clusters draws the same cluster
+    weights from the same seed, and doubling every weight cancels in
+    sum w V / sum w.  So every replicate of the twin table equals the
+    single table's.  Resampling items instead would draw 300 independent
+    weights and shrink the spread by ~1/sqrt(2).  Tolerance 1e-12
+    relative: the sums run over 300 terms instead of 150."""
+    xs = np.geomspace(1, 100, 5)
+    rng = np.random.default_rng(3)
+    V = np.log(xs)[None, :] + rng.normal(0, 1, (150, 1)) + rng.normal(0, .3, (150, 5))
+    ids = [f"c{i:03d}" for i in range(150)]
+    single = value_curves(vframe(V, xs, items=ids), "x", "v", n_boot=400, seed=0)
+    twin_ids = [f"{c}{s}" for c in ids for s in "ab"]
+    twin = value_curves(vframe(np.repeat(V, 2, axis=0), xs, items=twin_ids,
+                               cluster=[c for c in ids for _ in "ab"]),
+                        "x", "v", n_boot=400, seed=0)
+    assert_same(twin.reps["mean"], single.reps["mean"], rtol=1e-12)
+    assert_same(twin.table, single.table, rtol=1e-12)
+
+
+def test_c25_phi_lc_interval_width_matches_the_sampling_spread():
+    """C25.  The bootstrap sd of phi_lc must estimate its true sampling sd.
+    Truth by simulation: R = 200 independent datasets of 300 items from one
+    process (odd items length 1, p = 0.6; even items length 2 with
+    c2 = c1 half the time, so phi_2 = Cov(c1, c2) = 0.5 Var(c1) = 0.105).
+    The across-dataset sd of the point phi_lc has relative SE
+    1/sqrt(2(R - 1)) = 0.050; the mean over datasets of the replicate sd
+    (B = 200 each) has a much smaller one.  15% is 3 SE."""
+    R, k, pts, sds = 200, 300, [], []
+    for s in range(R):
+        rng = np.random.default_rng(7000 + s)
+        oks = []
+        for i in range(k):
+            if i % 2:
+                oks.append([int(rng.random() < 0.6)])
+            else:
+                c1 = int(rng.random() < 0.7)
+                c2 = c1 if rng.random() < 0.5 else int(rng.random() < 0.5)
+                oks.append([c1, c2])
+        res = axis_curves(frame({1.0: oks, 2.0: oks}), "x", n_boot=200, seed=s)
+        pts.append(res.table["phi_lc"].iloc[0])
+        sds.append(res.reps["phi_lc"][:, 0].std(ddof=1))
+    assert np.mean(sds) == pytest.approx(np.std(pts, ddof=1), rel=0.15)
+
+
+def test_c26_linear_axis_chi_is_exact():
+    """C26.  On a linear axis chi = dA/dx.  numpy's non-uniform centred
+    difference is exact for a linear function (second order in the
+    interior, and the one-sided ends are exact for a line), so A = 0.01 x
+    gives chi = 0.01 at every point, on a grid including x = 0 where the log
+    form is undefined.  Through the full analyses: 100 single-token items,
+    item i right at x iff i < x, so A(x) = x/100 exactly on x in
+    {0, 10, 30, 70}; and a per-item value 0.01 x.  Tolerance 1e-12
+    absolute: rounding in differences of O(1) numbers."""
+    x = np.array([0.0, 1, 3, 7, 20])
+    assert_same(susceptibility(x, 0.01 * x, log=False), np.full(5, 0.01),
+                atol=1e-12)
+    xs = [0.0, 10.0, 30.0, 70.0]
+    oks = {xv: [[int(i < xv)] for i in range(100)] for xv in xs}
+    t = axis_curves(frame(oks), "x", n_boot=50, log_x=False).table
+    assert_same(t["A_obs"].to_numpy(), np.array(xs) / 100, atol=1e-12)
+    assert_same(t["chi_obs"].to_numpy(), np.full(4, 0.01), atol=1e-12)
+    V = np.tile(0.01 * np.array(xs), (25, 1))
+    vt = value_curves(vframe(V, xs), "x", "v", n_boot=50, log_x=False).table
+    assert_same(vt["chi"].to_numpy(), np.full(4, 0.01), atol=1e-12)
+
+
+def test_c28_axis_curves_reports_the_nan_replicate_share():
+    """C28.  40 items, one of length 3 and the rest length 1.  phi_l3 is
+    undefined (NaN) in every replicate that does not draw that item:
+    probability (1 - 1/40)^40 = 0.3632.  The interval of phi_l3 then
+    describes only 64% of replicates, so the share must be reported, as
+    value_curves does for a crossing (`<name>_censored`).  B = 1000:
+    binomial SE of the share is 0.015; tolerance 0.05 is 3.3 SE."""
+    rng = np.random.default_rng(0)
+    oks = [[int(rng.random() < 0.5)] for _ in range(39)] + [[1, 0, 1]]
+    res = axis_curves(frame({1.0: oks, 2.0: oks}), "x", n_boot=1000)
+    expect = (1 - 1 / 40) ** 40
+    assert "phi_l3_censored" in res.table.columns, "NaN share not reported"
+    assert res.table["phi_l3_censored"].iloc[0] == pytest.approx(expect, abs=0.05)

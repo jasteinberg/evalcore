@@ -45,8 +45,6 @@ from typing import Any
 
 from ..core.spec import Item
 from .base import Task
-from .formats import render_canonical
-from .graders import make_score
 
 __all__ = ["FORMATS", "QUESTION_TYPES", "Span", "generate_trace",
            "log_qa_items", "log_qa_task", "serialise"]
@@ -123,6 +121,10 @@ def generate_trace(rng: random.Random, n_spans: int = 20, max_depth: int = 3,
     return spans
 
 
+def _attrs(s: Span) -> str:
+    return "".join(f" {k}={v}" for k, v in sorted(s.attrs.items()))
+
+
 def serialise(spans: Sequence[Span], fmt: str) -> str:
     """The trace as text in one of FORMATS."""
     if fmt == "json":
@@ -136,10 +138,9 @@ def serialise(spans: Sequence[Span], fmt: str) -> str:
 
         def walk(pid: str | None, depth: int) -> None:
             for s in kids.get(pid, []):
-                att = "".join(f" {k}={v}" for k, v in sorted(s.attrs.items()))
                 retry = f" attempt={s.attempt}" if s.attempt > 1 else ""
                 out.append(f"{'  ' * depth}{s.name} [{s.id}] {s.ms} ms "
-                           f"{s.status}{retry}{att}")
+                           f"{s.status}{retry}{_attrs(s)}")
                 walk(s.id, depth + 1)
 
         walk(None, 0)
@@ -150,10 +151,9 @@ def serialise(spans: Sequence[Span], fmt: str) -> str:
             events.append((s.start_ms, 0, s.id,
                            f"t={s.start_ms:07d}ms START {s.name} id={s.id} "
                            f"parent={s.parent or '-'} attempt={s.attempt}"))
-            att = "".join(f" {k}={v}" for k, v in sorted(s.attrs.items()))
             events.append((s.end_ms, 1, s.id,
                            f"t={s.end_ms:07d}ms END {s.name} id={s.id} "
-                           f"status={s.status} duration={s.ms}ms{att}"))
+                           f"status={s.status} duration={s.ms}ms{_attrs(s)}"))
         events.sort()
         return "\n".join(e[3] for e in events)
     raise ValueError(f"fmt must be one of {FORMATS}")
@@ -257,7 +257,16 @@ def log_qa_items(n_traces: int = 50, fmt: str = "log", n_spans: int = 20,
                  position: float | None = None, seed: int = 0,
                  **trace_kw: Any) -> list[Item]:
     """Items for `n_traces` generated traces, one per supported question
-    type per trace.  The cluster of every item is its trace."""
+    type per trace.  The cluster of every item is its trace.
+
+    `fmt` only re-serialises: one seed gives the same traces in every
+    format.  With `position` set, the target span is chosen by where it
+    sits in the serialised text, which depends on `fmt`, and the draws that
+    follow (which attribute to ask about) depend on that span.  Those draws
+    therefore come from a generator of their own per trace, seeded by
+    (seed, trace index), so they cannot shift the trace stream.  With
+    `position` unset every draw is format-independent and the single stream
+    is kept, so those items are unchanged."""
     unknown = set(types) - set(QUESTION_TYPES)
     if unknown:
         raise ValueError(f"unknown question types {sorted(unknown)}")
@@ -267,7 +276,8 @@ def log_qa_items(n_traces: int = 50, fmt: str = "log", n_spans: int = 20,
         spans = generate_trace(rng, n_spans, max_depth, **trace_kw)
         text = serialise(spans, fmt)
         trace_id = f"trace{seed}-{k:04d}"
-        for t, q, gold, spec, extra in _questions(spans, text, rng, types,
+        qrng = rng if position is None else random.Random(f"{seed}/{k}")
+        for t, q, gold, spec, extra in _questions(spans, text, qrng, types,
                                                   position):
             meta = {"type": t, "fmt": fmt, "n_spans": len(spans),
                     "context_chars": len(text), "trace": trace_id, **extra}
@@ -288,8 +298,7 @@ def log_qa_task(n_traces: int = 50, fmt: str = "log", n_spans: int = 20,
                 position: float | None = None, seed: int = 0,
                 p_error: float = 0.15, p_retry: float = 0.6) -> Task:
     """The items as a Task with the canonical render and grader-driven
-    score; works with any generating backend."""
-    items = log_qa_items(n_traces, fmt, n_spans, max_depth, types, position,
-                         seed, p_error=p_error, p_retry=p_retry)
-    return Task(f"log_qa_{fmt}", items, render=render_canonical,
-                score=make_score())
+    score (Task's defaults); works with any generating backend."""
+    return Task(f"log_qa_{fmt}", log_qa_items(
+        n_traces, fmt, n_spans, max_depth, types, position, seed,
+        p_error=p_error, p_retry=p_retry))

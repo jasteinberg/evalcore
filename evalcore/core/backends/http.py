@@ -22,7 +22,7 @@ from .base import (
     ToolSpec,
     Transient,
     merge_params,
-    refuse_dropped,
+    refuse_unread,
     require,
 )
 
@@ -78,15 +78,45 @@ def _json_args(raw: Any) -> Any:
     return val if isinstance(val, Mapping) else raw
 
 
+def _split_system(messages: Sequence[Message]
+                  ) -> tuple[str | None, list[tuple[str, Any]]]:
+    """The system messages joined (None if there are none), and the rest
+    grouped by `_runs`: Anthropic and Gemini take the system prompt as a
+    separate field."""
+    sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
+    rest = _runs([m for m in messages if m["role"] != "system"])
+    return ("\n\n".join(sys_msgs) if sys_msgs else None), rest
+
+
+def _args_object(call: Mapping[str, Any]) -> Any:
+    """A call's arguments as the object Anthropic and Gemini require; a raw
+    string (arguments that were not valid JSON) is sent as {}."""
+    return call["arguments"] if isinstance(call["arguments"], Mapping) else {}
+
+
+def _gemini_id(call_id: Any) -> dict[str, Any]:
+    """{"id": call_id} for an id the API issued; {} for a local
+    "gemini-<k>" id, which must never be sent back."""
+    return {} if str(call_id).startswith("gemini-") else {"id": call_id}
+
+
+# each adapter sends exactly these params; the forwarding code below reads
+# the same sets, so the refusal and the body cannot drift apart
+ANTHROPIC_SENT = frozenset({"max_tokens", "temperature", "top_p",
+                            "stop_sequences"})
+OPENAI_SENT = frozenset({"temperature", "top_p", "seed", "logprobs",
+                         "top_logprobs", "stop", "max_tokens"})
+GEMINI_SENT = frozenset({"temperature", "top_p", "max_tokens", "stop"})
+
+
 def _anthropic_adapter(model: str, messages: Sequence[Message],
                        params: Mapping[str, Any],
                        tools: Sequence[ToolSpec] | None = None
                        ) -> tuple[str, JSONDict]:
-    refuse_dropped(params, {"max_tokens", "temperature", "top_p",
-                            "stop_sequences"}, "anthropic adapter")
-    sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
+    refuse_unread(params, ANTHROPIC_SENT, "anthropic adapter")
+    system, runs = _split_system(messages)
     msgs: list[JSONDict] = []
-    for role, m in _runs([m for m in messages if m["role"] != "system"]):
+    for role, m in runs:
         if role == "tool":
             # one user message, tool_result blocks first (the API requires it)
             msgs.append({"role": "user", "content": [
@@ -101,23 +131,20 @@ def _anthropic_adapter(model: str, messages: Sequence[Message],
             blocks = ([{"type": "text", "text": m["content"]}]
                       if m.get("content") else [])
             blocks += [{"type": "tool_use", "id": c["id"], "name": c["name"],
-                        "input": c["arguments"] if isinstance(
-                            c["arguments"], Mapping) else {}}
-                       for c in m["tool_calls"]]
+                        "input": _args_object(c)} for c in m["tool_calls"]]
             msgs.append({"role": "assistant", "content": blocks})
         else:
             msgs.append({"role": m["role"], "content": m["content"]})
     body = {"model": model,
             "max_tokens": require(params, "max_tokens", "anthropic"),
             "messages": msgs}
-    if sys_msgs:
-        body["system"] = "\n\n".join(sys_msgs)
+    if system is not None:
+        body["system"] = system
     if tools:
         body["tools"] = [{"name": t["name"], "description": t["description"],
                           "input_schema": t["parameters"]} for t in tools]
-    for k in ("temperature", "top_p", "stop_sequences"):
-        if k in params:
-            body[k] = params[k]
+    body |= {k: params[k] for k in sorted(ANTHROPIC_SENT - {"max_tokens"})
+             if k in params}
     return "/v1/messages", body
 
 
@@ -141,8 +168,7 @@ def _openai_adapter(model: str, messages: Sequence[Message],
                     params: Mapping[str, Any],
                     tools: Sequence[ToolSpec] | None = None
                     ) -> tuple[str, JSONDict]:
-    refuse_dropped(params, {"temperature", "top_p", "max_tokens", "seed",
-                            "stop"}, "openai adapter")
+    refuse_unread(params, OPENAI_SENT, "openai adapter")
     msgs: list[JSONDict] = []
     for m in messages:
         if m["role"] == "tool":
@@ -166,10 +192,8 @@ def _openai_adapter(model: str, messages: Sequence[Message],
                                        "description": t["description"],
                                        "parameters": t["parameters"]}}
                          for t in tools]
-    for k in ("temperature", "top_p", "seed", "logprobs", "top_logprobs",
-              "stop"):
-        if k in params:
-            body[k] = params[k]
+    body |= {k: params[k] for k in sorted(OPENAI_SENT - {"max_tokens"})
+             if k in params}
     # `max_tokens` is deprecated in Chat Completions and rejected by newer
     # models (found live, 2 Oct); `max_completion_tokens` replaces it.  It
     # also counts reasoning tokens, so on a reasoning model a small budget
@@ -200,11 +224,10 @@ def _gemini_adapter(model: str, messages: Sequence[Message],
                     params: Mapping[str, Any],
                     tools: Sequence[ToolSpec] | None = None
                     ) -> tuple[str, JSONDict]:
-    refuse_dropped(params, {"temperature", "top_p", "max_tokens", "stop"},
-                   "gemini adapter")
-    sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
+    refuse_unread(params, GEMINI_SENT, "gemini adapter")
+    system, runs = _split_system(messages)
     contents: list[JSONDict] = []
-    for role, m in _runs([m for m in messages if m["role"] != "system"]):
+    for role, m in runs:
         if role == "tool":
             # function responses go back in a user turn; `response` must be
             # an object, so the text is wrapped
@@ -213,41 +236,45 @@ def _gemini_adapter(model: str, messages: Sequence[Message],
                     "name": t["name"],
                     "response": {"error" if t.get("is_error") else "result":
                                  t["content"]},
-                    **({"id": t["tool_call_id"]}
-                       if not str(t["tool_call_id"]).startswith("gemini-")
-                       else {})}}
+                    **_gemini_id(t["tool_call_id"])}}
                 for t in m]})
         elif role == "assistant" and (m.get("raw_turn") or {}).get("gemini"):
             contents.append({"role": "model", "parts": m["raw_turn"]["gemini"]})
         elif role == "assistant":
             parts = [{"text": m["content"]}] if m.get("content") else []
-            parts += [{"functionCall": {
-                "name": c["name"], "args": c["arguments"] if isinstance(
-                    c["arguments"], Mapping) else {},
-                **({"id": c["id"]} if not str(c["id"]).startswith("gemini-")
-                   else {})}} for c in m.get("tool_calls") or []]
+            parts += [{"functionCall": {"name": c["name"],
+                                        "args": _args_object(c),
+                                        **_gemini_id(c["id"])}}
+                      for c in m.get("tool_calls") or []]
             contents.append({"role": "model", "parts": parts})
         else:
             contents.append({"role": "user", "parts": [{"text": m["content"]}]})
     body: JSONDict = {"contents": contents}
-    if sys_msgs:
-        body["systemInstruction"] = {"parts": [{"text": "\n\n".join(sys_msgs)}]}
+    if system is not None:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
     if tools:
         body["tools"] = [{"functionDeclarations": [
             {"name": t["name"], "description": t["description"],
              "parameters": t["parameters"]} for t in tools]}]
-    gc = {}
-    for src, dst in (("temperature", "temperature"), ("top_p", "topP"),
-                     ("max_tokens", "maxOutputTokens"), ("stop", "stopSequences")):
-        if src in params:
-            gc[dst] = params[src]
+    gc = {dst: params[src] for src, dst in (
+        ("temperature", "temperature"), ("top_p", "topP"),
+        ("max_tokens", "maxOutputTokens"), ("stop", "stopSequences"))
+        if src in params}
     if gc:
         body["generationConfig"] = gc
     return f"/v1beta/models/{model}:generateContent", body
 
 
 def _gemini_parse(js: Mapping[str, Any]) -> tuple[str, JSONDict]:
-    cands = js.get("candidates") or [{}]
+    # A blocked prompt is answered 200 with promptFeedback.blockReason and
+    # no candidates.  Read as a reply it would be an ok row with text "",
+    # i.e. a wrong answer; it is a refusal of the request, and fatal because
+    # resending the same prompt is blocked the same way.
+    if not js.get("candidates"):
+        reason = (js.get("promptFeedback") or {}).get("blockReason")
+        raise Fatal(f"gemini blocked the prompt (blockReason={reason})"
+                    if reason else "gemini reply has no candidates")
+    cands = js["candidates"]
     parts = cands[0].get("content", {}).get("parts", [])
     u = js.get("usageMetadata", {})
     # the reference marks functionCall.id optional; a call without one gets
@@ -380,10 +407,7 @@ class HTTPBackend(Backend):
         dt = time.perf_counter() - t0
         self.last_rate_limits = {k: v for k, v in r.headers.items()
                                  if any(c in k.lower() for c in RATE_LIMIT_CUES)}
-        if r.status_code in (408, 409, 429) or r.status_code >= 500:
-            raise Transient(_error_text(r), retry_after=_retry_after(r))
-        if r.status_code >= 400:
-            raise Fatal(_error_text(r))
+        _raise_for_status(r)
         text, meta = self.parse(r.json())
         return Response(req.unit_id, text=text,
                         meta={**meta, "latency_s": dt, "backend": self.flavour,
@@ -391,3 +415,12 @@ class HTTPBackend(Backend):
 
     def close(self) -> None:
         self.client.close()
+
+
+def _raise_for_status(r: Any) -> None:
+    """408, 409, 429 and 5xx are worth retrying (Transient, honouring
+    Retry-After); any other 4xx is the request's fault (Fatal)."""
+    if r.status_code in (408, 409, 429) or r.status_code >= 500:
+        raise Transient(_error_text(r), retry_after=_retry_after(r))
+    if r.status_code >= 400:
+        raise Fatal(_error_text(r))

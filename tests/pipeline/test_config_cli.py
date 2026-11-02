@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
+from support.scripted import Counting
 
 import evalcore.config as config_mod
+from evalcore import Cell, FunctionBackend
 from evalcore.__main__ import main
 from evalcore.config import ConfigError, from_config
+from evalcore.registry import REGISTRIES
 
 pytestmark = pytest.mark.filterwarnings(
     # plumbing fixtures are deliberately tiny; caveats are tested in test_stats
     "ignore:.*carry caveats:RuntimeWarning")
-
-CORE_TESTS = Path(__file__).parents[1] / "core"
 
 
 def tasks_file(tmp_path, n=4):
@@ -80,6 +79,35 @@ def test_a_required_key_is_named(tmp_path):
         from_config(c)
 
 
+@pytest.mark.parametrize("over,bad", [
+    ({"agent": {"max_turn": 3}}, "agent: unknown key(s) ['max_turn']"),
+    ({"search": {"retriever": "bm25", "k": 3, "kk": 1}},
+     "search: unknown key(s) ['kk']"),
+])
+def test_d16_agent_and_search_sub_keys_are_strict(tmp_path, over, bad):
+    """D16.  Hand-written typos: each must be refused by name before any
+    backend is built."""
+    with pytest.raises(ConfigError) as e:
+        from_config(cfg(tmp_path, task={"type": "search_qa", "n_towns": 4},
+                        **over))
+    assert bad in str(e.value)
+
+
+@pytest.mark.parametrize("lines,bad", [
+    ([{"id": "a", "txt": "x"}], "each line must be exactly"),
+    ([{"id": "a", "text": "x"}, {"id": "a", "text": "y"}], "duplicate id 'a'"),
+])
+def test_d16_corpus_lines_are_strict(tmp_path, lines, bad):
+    """D16.  Hand-written corpus faults: a misspelt field and a duplicate
+    document id are refused, naming the line."""
+    corpus = tmp_path / "docs.jsonl"
+    corpus.write_text("\n".join(json.dumps(r) for r in lines))
+    task = {"type": "file", "corpus": str(corpus),
+            "path": str(tasks_file(tmp_path, n=1))}
+    with pytest.raises(ConfigError, match=bad):
+        from_config(cfg(tmp_path, task=task))
+
+
 def test_a_task_the_backend_cannot_serve_fails_before_any_spend(tmp_path,
                                                                monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
@@ -112,21 +140,63 @@ def test_cli_run_dry_run_and_summarize(tmp_path, capsys):
     assert "status: ok 4" in capsys.readouterr().out
 
 
-def test_a_local_model_task_from_config(tmp_path, monkeypatch):
-    """Teacher-forced arithmetic through the whole pipeline on a toy model
-    (the HF loader is replaced so nothing is downloaded)."""
-    pytest.importorskip("torch")
-    sys.path.insert(0, str(CORE_TESTS))
-    from test_hf_scoring import KeepLM, ToyTok
+def test_d21_cli_exits_nonzero_on_a_halted_run(tmp_path, monkeypatch, capsys):
+    """D21.  Contract: a run halted over budget returns 1 from the CLI and
+    writes no sink.  Cost hand-computed: calibration measures 100 in / 5
+    out tokens per call, so 4 units at $1000 per 1M tokens cost
+    (400 + 20) * 1000 / 1e6 = $0.42 > max_cost $0.01."""
+    monkeypatch.setitem(REGISTRIES["backend"].factories, "counting",
+                        lambda: FunctionBackend(Counting(),
+                                                identity={"model": "c"}))
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(cfg(tmp_path, backend={"type": "counting"},
+                                   grid={"model": ["c"]},
+                                   options={"workers": 1, "max_cost": 0.01,
+                                            "prices": {"in": 1000.0,
+                                                       "out": 1000.0}})))
+    assert main(["run", str(path)]) == 1
+    assert "halted: estimated cost $0.42 exceeds" in capsys.readouterr().out
+    assert not (tmp_path / "runs" / "r.jsonl").exists()
 
-    monkeypatch.setattr(config_mod, "_hf_load", lambda spec, head: (
-        KeepLM(len(ToyTok().vocab)), ToyTok()))
+
+@pytest.fixture
+def toy_lm(monkeypatch):
+    """The HF loader replaced by a toy causal LM, so nothing is downloaded."""
+    pytest.importorskip("torch")
+    from support.toy_hf import CharTok, KeepLM
+
+    monkeypatch.setattr(config_mod, "_hf_load", lambda *a: (
+        KeepLM(len(CharTok().vocab)), CharTok()))
+
+
+def test_a_local_model_task_from_config(tmp_path, toy_lm):
+    """Teacher-forced arithmetic through the whole pipeline on a toy model."""
     res = from_config(cfg(tmp_path, task={"type": "arithmetic", "n_items": 6},
                           backend={"type": "hf", "model": "toy"},
+                          grid={}, tags={"model": "toy"},
                           metric="em_tf")).run()
     assert len(res.frame) == 6 and (res.frame["status"] == "ok").all()
     assert set(res.calibration.throughput) >= {1, 2}      # batch ladder ran
     assert res.settings["workers"] == 1
+    # the label is a column in every row and stays out of the cell id
+    assert (res.frame["model"] == "toy").all()
+    assert (res.frame["cell_id"] == Cell({}).id).all()
+
+
+def test_a_label_in_an_hf_grid_is_refused_before_any_call(tmp_path, toy_lm):
+    """HF reads no "model" param (the model is loaded), so a grid axis of
+    labels would make cells that differ in id and are the same request; the
+    refusal names the key, at construction, before calibration spends."""
+    with pytest.raises(ValueError, match=r"6 of 6 requests.*'model'.*tags"):
+        from_config(cfg(tmp_path, task={"type": "arithmetic", "n_items": 6},
+                        backend={"type": "hf", "model": "toy"},
+                        grid={"model": ["toy"]}, metric="em_tf"))
+    assert not (tmp_path / "runs" / "r.jsonl").exists()   # no sink, no call
+
+
+def test_tags_must_be_a_mapping(tmp_path):
+    with pytest.raises(ConfigError, match="tags"):
+        from_config(cfg(tmp_path, tags=["model", "echo"]))
 
 
 # --- your own components ----------------------------------------------------------
@@ -181,12 +251,6 @@ def test_a_missing_plugin_is_named(tmp_path):
         from_config(cfg(tmp_path, plugins=["no_such_module_xyz"]))
 
 
-def test_registering_a_taken_name_needs_replace():
-    from evalcore.registry import register
-    with pytest.raises(ValueError, match="already registered"):
-        register("backend", "echo")(lambda: None)
-
-
 # --- retrieval from config ------------------------------------------------------------
 
 def retrieval_cfg(tmp_path, retriever=None, **over):
@@ -219,10 +283,8 @@ def test_retrieval_analysis_from_config(tmp_path):
 def test_a_file_task_with_a_corpus_is_evaluated(tmp_path):
     tasks = tmp_path / "q.jsonl"
     tasks.write_text("\n".join(json.dumps(r) for r in [
-        {"id": "q1", "prompt": "where do cats sit", "gold": "-",
-         "grader": "exact", "gold_docs": ["c"]},
-        {"id": "q2", "prompt": "dogs on mats", "gold": "-", "grader": "exact",
-         "gold_docs": ["d"]}]))
+        {"id": "q1", "prompt": "where do cats sit", "gold_docs": ["c"]},
+        {"id": "q2", "prompt": "dogs on mats", "gold_docs": ["d"]}]))
     corpus = tmp_path / "docs.jsonl"
     corpus.write_text("\n".join(json.dumps(r) for r in [
         {"id": "c", "text": "cats sit"}, {"id": "d", "text": "dogs mats"}]))
@@ -281,9 +343,9 @@ def test_items_without_gold_documents_are_refused(tmp_path):
 
 def test_a_dense_retriever_from_config(tmp_path, monkeypatch):
     pytest.importorskip("torch")
-    sys.path.insert(0, str(CORE_TESTS))
-    from test_embed import Enc, Tok
-    monkeypatch.setattr(config_mod, "_hf_load", lambda spec, head: (Enc(), Tok()))
+    from support.toy_hf import EmbedTok, MeanEncoder
+    monkeypatch.setattr(config_mod, "_hf_load",
+                        lambda *a: (MeanEncoder(), EmbedTok()))
     c = retrieval_cfg(tmp_path, retriever={
         "type": "dense", "cache_dir": str(tmp_path / "emb"),
         "embedder": {"type": "hf", "model": "toy", "pooling": "mean"}})

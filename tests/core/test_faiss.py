@@ -5,6 +5,9 @@ everywhere else it runs here."""
 
 from __future__ import annotations
 
+import contextlib
+import os
+
 import numpy as np
 import pytest
 
@@ -17,6 +20,13 @@ from evalcore.core.search import (
     omp_clash,
 )
 
+# The session will load torch sooner or later (other test files import it),
+# and faiss loaded first aborts the process then, not here.  So load it now
+# and let omp_clash judge, except in the fresh interpreter test_search
+# starts for exactly this file, which must never load torch.
+if not os.environ.get("EVALCORE_FAISS_ALONE"):
+    with contextlib.suppress(ImportError):
+        import torch  # noqa: F401
 if omp_clash() is not None:
     pytest.skip("faiss cannot load beside torch here; test_search runs this "
                 "file in a fresh process", allow_module_level=True)

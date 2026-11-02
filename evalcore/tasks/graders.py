@@ -12,10 +12,20 @@ A grader is named in an item's payload as a string or a dict,
 it is graded without code.  `grade(spec, text, gold)` dispatches;
 `make_score()` builds a runner `score` function that reads the spec and the
 gold answer from each item.
+
+Each grader checks its options and its gold BEFORE it reads the text, and
+raises ValueError for a spec that no response could be graded under (an
+unknown `pick`, a gold that is not one of the options, a gold that
+normalises to the empty string).  `check_spec` relies on that order: it
+calls the grader with an empty response, which every grader must refuse
+with ParseFailure, so a ParseFailure there means the spec and gold are
+sound and only the response is missing.  A task file is checked
+this way at load, before any model call.
 """
 
 from __future__ import annotations
 
+import inspect
 import re
 import string
 from collections.abc import Callable, Mapping, Sequence
@@ -25,8 +35,8 @@ from ..core.backends import Response
 from ..core.runner import ParseFailure
 from ..core.spec import Unit
 
-__all__ = ["GRADERS", "grade", "grader", "make_score", "normalize",
-           "score_teacher_forced"]
+__all__ = ["GRADERS", "check_spec", "grade", "grader", "make_score",
+           "normalize", "score_teacher_forced"]
 
 GRADERS: dict[str, Callable[..., dict[str, Any]]] = {}
 
@@ -34,9 +44,14 @@ GRADERS: dict[str, Callable[..., dict[str, Any]]] = {}
 GraderFn = TypeVar("GraderFn", bound=Callable[..., dict[str, Any]])
 
 
-def grader(name: str) -> Callable[[GraderFn], GraderFn]:
-    """Register a grader under `name`."""
+def grader(name: str, *, replace: bool = False
+           ) -> Callable[[GraderFn], GraderFn]:
+    """Register a grader under `name`.  A taken name is refused unless
+    `replace` (one implementation per name, as `Registry.add` enforces)."""
     def deco(fn: GraderFn) -> GraderFn:
+        if name in GRADERS and not replace:
+            raise ValueError(f"grader {name!r} is already registered "
+                             f"(pass replace=True to override it)")
         GRADERS[name] = fn
         return fn
     return deco
@@ -63,12 +78,24 @@ def _aliases(gold: Any) -> list[str]:
     return [str(g) for g in gold] if isinstance(gold, (list, tuple)) else [str(gold)]
 
 
+def _text_golds(gold: Any, case: bool, punct: bool) -> list[str]:
+    """The normalised aliases.  One that normalises to "" cannot be graded:
+    "" is a substring of every text (`contains` scores everything right)
+    and equals no readable answer (`exact` scores everything wrong)."""
+    golds = [normalize(g, case, punct) for g in _aliases(gold)]
+    if not golds or "" in golds:
+        raise ValueError(f"gold {gold!r} normalises to an empty string, so "
+                         f"no response can be graded against it")
+    return golds
+
+
 @grader("exact")
 def exact(text: str, gold: Any, case: bool = False, punct: bool = False,
           extract: str | None = None) -> dict[str, Any]:
     """Normalised string equality against the gold or any of its aliases.
     `extract` is a regex whose first group is the answer; no match is a
     parse failure."""
+    golds = _text_golds(gold, case, punct)
     t = _text(text)
     if extract is not None:
         m = re.search(extract, t, re.S)
@@ -76,9 +103,7 @@ def exact(text: str, gold: Any, case: bool = False, punct: bool = False,
             raise ParseFailure(f"no match for {extract!r}")
         t = m.group(1)
     pred = normalize(t, case, punct)
-    return {"correct": float(any(pred == normalize(g, case, punct)
-                                 for g in _aliases(gold))),
-            "pred": pred}
+    return {"correct": float(pred in golds), "pred": pred}
 
 
 @grader("contains")
@@ -87,9 +112,9 @@ def contains(text: str, gold: Any, case: bool = False,
     """The normalised gold (or an alias) occurs in the normalised text.  It
     rewards verbosity -- a response listing every candidate contains the
     right one -- so prefer `exact` with `extract` where the format allows."""
+    golds = _text_golds(gold, case, punct)
     t = normalize(_text(text), case, punct)
-    return {"correct": float(any(normalize(g, case, punct) in t
-                                 for g in _aliases(gold)))}
+    return {"correct": float(any(g in t for g in golds))}
 
 
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?|-?\.\d+")
@@ -101,11 +126,14 @@ def numeric(text: str, gold: Any, tol: float = 0.0, rel: float = 0.0,
     """Compare the first or last number in the text with the gold:
     correct iff |x - g| <= max(tol, rel |g|).  Thousands separators are
     removed ("1,234" is 1234).  No number at all is a parse failure."""
+    if pick not in ("first", "last"):
+        raise ValueError(f"numeric: pick must be 'first' or 'last', not {pick!r}")
+    g = float(gold)
     nums = _NUM.findall(_text(text))
     if not nums:
         raise ParseFailure("no number in the response")
     raw = nums[-1] if pick == "last" else nums[0]
-    x, g = float(raw.replace(",", "")), float(gold)
+    x = float(raw.replace(",", ""))
     return {"correct": float(abs(x - g) <= max(tol, rel * abs(g))),
             "pred": x, "abs_err": abs(x - g)}
 
@@ -116,15 +144,26 @@ def choice(text: str, gold: str, options: str = "ABCD") -> dict[str, Any]:
     "answer is (C)"); otherwise a standalone option letter, but only if
     exactly ONE distinct option letter stands alone in the text.  Taking the
     first letter instead would read "A good question..." as answer A, and
-    several distinct letters are ambiguous, which is a parse failure."""
+    several distinct letters are ambiguous, which is a parse failure.
+
+    The word "answer" is matched in any case, the letter case-sensitively:
+    an upper-case option letter counts, a lower-case one only where it
+    cannot be an English word, inside parentheses ("answer: (c)") or
+    followed by the end of the text or punctuation ("answer is c.").  So
+    "the answer is a tricky one, but B" reads B: "a" is an article."""
+    up = options.upper()
+    if len(str(gold)) != 1 or str(gold).upper() not in up:
+        raise ValueError(f"choice: gold {gold!r} is not one of the options "
+                         f"{options!r}")
     t = _text(text)
-    opts = re.escape(options)
-    m = re.findall(rf"answer\s*(?:is|:)?\s*\(?([{opts}])\)?\b", t, re.I)
+    hi, lo = re.escape(up), re.escape(options.lower())
+    m = re.findall(rf"(?i:answer)\s*(?:is|:)?\s*(?:\(?([{hi}])\)?\b"
+                   rf"|\(([{lo}])\)|([{lo}])(?=\s*(?:$|[.,;:!?])))", t)
     if m:
-        pred = m[-1].upper()
+        pred = "".join(m[-1]).upper()
     else:
-        alone = set(re.findall(rf"(?<![A-Za-z])\(?([{opts}])\)?(?![A-Za-z])",
-                               t))
+        alone = set(re.findall(
+            rf"(?<![A-Za-z])\(?([{re.escape(options)}])\)?(?![A-Za-z])", t))
         if len(alone) != 1:
             raise ParseFailure("no unambiguous option letter"
                                if alone else "no option letter")
@@ -177,9 +216,8 @@ def abstain(text: str, gold: Any = None,
             "hallucinated": float(not said)}
 
 
-def grade(spec: str | Mapping[str, Any], text: str | None,
-          gold: Any) -> dict[str, Any]:
-    """Dispatch on a grader spec: a name, or {"name": ..., **options}."""
+def _parse(spec: str | Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """A grader spec as (name, options); KeyError for an unknown name."""
     if isinstance(spec, str):
         name, opts = spec, {}
     else:
@@ -187,7 +225,45 @@ def grade(spec: str | Mapping[str, Any], text: str | None,
         name = opts.pop("name")
     if name not in GRADERS:
         raise KeyError(f"unknown grader {name!r}; known: {sorted(GRADERS)}")
+    return name, opts
+
+
+def grade(spec: str | Mapping[str, Any], text: str | None,
+          gold: Any) -> dict[str, Any]:
+    """Dispatch on a grader spec: a name, or {"name": ..., **options}."""
+    name, opts = _parse(spec)
     return GRADERS[name](text, gold, **opts)
+
+
+_NO_GOLD = object()
+
+
+def check_spec(spec: str | Mapping[str, Any], gold: Any = _NO_GOLD) -> None:
+    """Refuse a grader spec (and gold) that no response could be graded
+    under, without a response: an unknown name, an option the grader does
+    not take, a required option missing, or an option or gold value the
+    grader itself rejects.  Raises KeyError for the name, ValueError for
+    the rest, naming the offending key or value."""
+    name, opts = _parse(spec)
+    fn = GRADERS[name]
+    params = dict(inspect.signature(fn).parameters)
+    for p in ("text", "gold"):
+        params.pop(p, None)
+    unknown = sorted(set(opts) - set(params))
+    if unknown:
+        raise ValueError(f"grader {name!r} has no option(s) {unknown}; "
+                         f"it takes {sorted(params)}")
+    missing = sorted(k for k, p in params.items()
+                     if p.default is inspect.Parameter.empty and k not in opts)
+    if missing:
+        raise ValueError(f"grader {name!r} needs option(s) {missing}")
+    args = () if gold is _NO_GOLD else (gold,)
+    try:
+        fn("", *args, **opts)
+    except ParseFailure:
+        return          # only the response is missing: spec and gold are sound
+    except TypeError as exc:        # e.g. float() of a list gold
+        raise ValueError(f"grader {name!r}: {exc}") from exc
 
 
 def make_score(grader_field: str = "grader", gold_field: str = "gold",
@@ -225,7 +301,11 @@ def label(text: str, gold: str, options: Sequence[str]) -> dict[str, Any]:
     (whole-word, case-insensitive), and it is compared with the gold.  Free
     text around it is fine ("the slowest was fetch_page").  Naming none is a
     parse failure; naming several is ambiguous, also a parse failure --
-    otherwise listing every option would score as right."""
+    otherwise listing every option would score as right.  A gold that is not
+    one of the options could never be named, so it is refused."""
+    if gold not in options:
+        raise ValueError(f"label: gold {gold!r} is not one of the options "
+                         f"{list(options)}")
     t = _text(text).lower()
     named = {o for o in options
              if re.search(rf"(?<![\w]){re.escape(o.lower())}(?![\w])", t)}

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..core.records import _status, read_manifest
+from ..core.records import read_manifest, row_status
 
 _RANK = {"ok": 0, "unparsed": 1, "truncated": 2, "tool_error": 3,
          "error": 4}
@@ -48,12 +48,11 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     missing; otherwise the worst status among its rows, ranked
     error > tool_error > truncated > unparsed > ok.  Counting rows instead
     breaks the identity on any frame carrying more than one row per unit --
-    a judge
-    panel with three verdicts per response is the case that will arrive --
-    where it reports err_rate = 2.0 and a negative `n_completed`.  `n_rows`
-    is kept as the frame's own row count precisely so that multiplicity
-    stays visible: for the one-row-per-unit frames `to_frame` produces, and
-    only for those,
+    a judge panel with three verdicts per response is the case that will
+    arrive -- where it reports err_rate = 2.0 and a negative `n_completed`.
+    `n_rows` is kept as the frame's own row count precisely so that
+    multiplicity stays visible: for the one-row-per-unit frames `to_frame`
+    produces, and only for those,
     `n_rows = n_completed + n_err + n_tool_error + n_truncated + n_unparsed
     + n_unplanned`.
 
@@ -74,7 +73,13 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     be filled in.
     """
     by = list(by)
-    st = _status(df)
+    st = row_status(df)
+    unknown = sorted(set(st) - set(_RANK))
+    if unknown:
+        raise ValueError(
+            f"status value(s) {unknown} are none of {sorted(_RANK)}: such a "
+            f"row would be counted in no column, or (with a manifest) as "
+            f"missing, and the accounting identity would hide it.")
     df = df.assign(_err=st.eq("error"), _tool=st.eq("tool_error"),
                    _trunc=st.eq("truncated"), _unp=st.eq("unparsed"),
                    _rank=st.map(_RANK))
@@ -141,7 +146,6 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     out["missing_rate"] = out.n_missing / plan_n
     out["attrition_rate"] = 1.0 - out.n_completed / plan_n
     cols = ["n_planned", "n_rows", "n_completed", "n_err", "n_tool_error",
-            "n_truncated",
-            "n_unparsed", "n_missing", "n_unplanned", "err_rate",
-            "missing_rate", "attrition_rate"]
+            "n_truncated", "n_unparsed", "n_missing", "n_unplanned",
+            "err_rate", "missing_rate", "attrition_rate"]
     return out[cols].reset_index()

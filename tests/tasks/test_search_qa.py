@@ -96,3 +96,12 @@ def test_closed_book_cannot_answer(tmp_path):
     numeric = df[df["group"] != "person_river"]
     assert (numeric["correct"] == 0.0).all()
     assert (df[df["group"] == "person_river"]["status"] == "unparsed").all()
+
+
+def test_gold_documents_contain_the_answer():
+    task, _ = search_qa(n_towns=8)
+    world = make_world(8, 0)
+    for it in task.items:
+        text = " ".join(world.docs[d] for d in it.payload["gold_docs"])
+        gold = it.payload["gold"]
+        assert (f"{gold:,}" if isinstance(gold, int) else gold) in text

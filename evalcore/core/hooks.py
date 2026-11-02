@@ -48,10 +48,14 @@ def hooked(model: Any, hooks: Mapping[str, Callable[..., Any]],
     output) with `with_kwargs` -- and pre-hooks (`pre=True`) get
     (module, args) or (module, args, kwargs); `fn` receives the module's
     name first.  A non-None return replaces the output (or the inputs, for
-    pre-hooks), as torch defines.  Yields the per-module call counter."""
+    pre-hooks), as torch defines.  Yields the per-module call counter, with
+    every hooked module present from the start: a module that never runs
+    stays in it at 0, so `check_counts` can name it."""
     counts: Counter[str] = Counter()
     targets = [(n, fn) for pat, fn in hooks.items()
                for n in match_modules(model, pat)]   # raise before registering
+    for name, _ in targets:
+        counts[name] = 0
     modules = dict(model.named_modules())
     handles = []
     try:
@@ -72,7 +76,9 @@ def hooked(model: Any, hooks: Mapping[str, Callable[..., Any]],
 def check_counts(counts: Counter[str], expected: int,
                  names: list[str] | None = None) -> None:
     """Assert every hooked module (or every name in `names`) ran exactly
-    `expected` times -- e.g. once per forward pass."""
+    `expected` times -- e.g. once per forward pass.  A hooked module that
+    never ran is in `counts` at 0 (`hooked` puts it there), so it fails
+    here by name instead of passing unseen."""
     names = list(counts) if names is None else names
     bad = {n: counts.get(n, 0) for n in names if counts.get(n, 0) != expected}
     if not names or bad:

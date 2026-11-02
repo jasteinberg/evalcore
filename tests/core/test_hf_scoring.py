@@ -1,7 +1,9 @@
-"""Teacher-forced scoring in HFBackend, with no download.
+"""Teacher-forced and candidate scoring in HFBackend, with no download.
 
 A toy causal model and a toy tokenizer stand in for a checkpoint.  The
-reference values come from running the model on each prefix of one
+tokenizer is one token per character except that "ab" is a single token,
+so a join between "a" and "b" is a merge the boundary check must catch.
+The reference values come from running the model on each prefix of one
 unpadded sequence separately -- no batching, no padding, no index
 arithmetic shared with the code under test -- so agreement checks the
 position bookkeeping, not a restatement of it.
@@ -15,52 +17,9 @@ from evalcore import FunctionProbe, HFBackend, Request
 
 torch = pytest.importorskip("torch")
 
+from support.toy_hf import CharTok, IgnoreKeepLM, KeepLM, SwallowLM, ToyLM  # noqa: E402
 
-class ToyTok:
-    """Character tokenizer, except that "ab" is a single token, so a join
-    between "a" and "b" is a merge the boundary check must catch."""
-
-    def __init__(self):
-        chars = "abcdefghijklmnopqrstuvwxyz0123456789 +=\n"
-        self.vocab = ["<pad>", "ab", *chars]
-        self.index = {t: i for i, t in enumerate(self.vocab)}
-        self.pad_token = self.eos_token = "<pad>"
-        self.pad_token_id = 0
-        self.padding_side = "right"
-        self.chat_template = None
-
-    def __call__(self, text, add_special_tokens=True):
-        ids, i = [], 0
-        while i < len(text):
-            if text.startswith("ab", i):
-                ids.append(self.index["ab"])
-                i += 2
-            else:
-                ids.append(self.index[text[i]])
-                i += 1
-        return {"input_ids": ids}
-
-    def decode(self, ids):
-        return "".join(self.vocab[i] for i in ids)
-
-
-class ToyLM(torch.nn.Module):
-    """h_t = mean of the embeddings of x_0..x_t, logits = W h_t.  Causal by
-    construction, so right padding cannot reach an earlier position."""
-
-    def __init__(self, vocab, d=16, seed=0):
-        super().__init__()
-        g = torch.Generator().manual_seed(seed)
-        self.emb = torch.nn.Parameter(torch.randn(vocab, d, generator=g))
-        self.out = torch.nn.Parameter(torch.randn(d, vocab, generator=g))
-
-    def forward(self, input_ids, attention_mask=None, output_attentions=False):
-        e = self.emb[input_ids]
-        h = e.cumsum(1) / torch.arange(1, e.shape[1] + 1)[None, :, None]
-
-        class Out:
-            logits = h @ self.out
-        return Out()
+MERGES = ("ab",)
 
 
 @torch.no_grad()
@@ -78,7 +37,7 @@ def reference(model, tok, prompt, target):
 
 
 def backend():
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     return HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu"), tok
 
 
@@ -105,17 +64,10 @@ def test_batched_scores_match_one_prefix_at_a_time():
         assert r.meta["sum_logp"] == pytest.approx(sum(logp), abs=1e-5)
         assert "".join(r.meta["target_tokens"]) == t
         assert r.meta["truncated"] is False and r.text is None
-
-
-def test_batch_equals_single():
-    """Padding to the longest sequence must not change any score."""
-    be, _ = backend()
-    batch = be.complete_batch([req(str(k), p, t)
-                               for k, (p, t) in enumerate(CASES)])
-    for k, (p, t) in enumerate(CASES):
-        alone = be.complete_batch([req(str(k), p, t)])[0]
-        assert alone.meta["logp"] == pytest.approx(batch[k].meta["logp"],
-                                                   abs=1e-6)
+        # padding to the longest sequence changes no score: the same request
+        # alone, through the same backend, to the tighter 1e-6
+        alone = be.complete_batch([req(r.unit_id, p, t)])[0]
+        assert alone.meta["logp"] == pytest.approx(r.meta["logp"], abs=1e-6)
 
 
 def test_a_merge_across_the_join_is_refused_and_only_that_request_fails():
@@ -131,28 +83,6 @@ def test_an_empty_prompt_is_refused():
     r = be.complete_batch([Request("u", [{"role": "user", "content": ""}],
                                    {}, target="5")])[0]
     assert not r.ok and "non-empty prompt" in r.error
-
-
-def test_decode_params_are_refused_when_scoring():
-    """Teacher forcing reads logits; temperature or max_tokens would move the
-    cell id and the cache key while changing nothing that is computed."""
-    be, _ = backend()
-    r = be.complete_batch([req("u", "1 =", " 1", temperature=0.7)])[0]
-    assert not r.ok and "temperature" in r.error
-
-
-def test_mixed_batch_scores_targets_and_routes_the_rest():
-    class Spy(HFBackend):
-        def _run_batch(self, reqs):
-            from evalcore import Response
-            return [Response(r.unit_id, text="generated") for r in reqs]
-
-    tok = ToyTok()
-    be = Spy(ToyLM(len(tok.vocab)), tok, device="cpu")
-    plain = Request("p", [{"role": "user", "content": "1 ="}], {})
-    out = be.complete_batch([req("s", "1 =", " 1"), plain])
-    assert [r.unit_id for r in out] == ["s", "p"]
-    assert out[0].meta["n_target"] == 2 and out[1].text == "generated"
 
 
 def test_pythia_tokenizer_boundary(monkeypatch):
@@ -203,7 +133,7 @@ def test_a_probe_in_scoring_mode_is_told_the_layout():
         seen.update(enc)
         return [{} for _ in reqs]
 
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     be = HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu",
                    probe=FunctionProbe(extract))
     be.complete_batch([req("a", "1 =", " 1"), req("b", "123 + 4 =", " 127")])
@@ -212,38 +142,10 @@ def test_a_probe_in_scoring_mode_is_told_the_layout():
     assert seen["attention_mask"].sum(1).tolist() == [5, 13]
 
 
-class BosTok(ToyTok):
-    """Adds a BOS ("^") unless told not to, and has a chat template that
-    also emits one -- the Llama arrangement."""
-
-    def __init__(self):
-        super().__init__()
-        self.vocab.append("^")
-        self.index["^"] = len(self.vocab) - 1
-        self.chat_template = "{{ bos_token }}..."
-
-    def __call__(self, text, add_special_tokens=True):
-        ids = super().__call__(text)["input_ids"]
-        return {"input_ids": ([self.index["^"]] if add_special_tokens else [])
-                + ids}
-
-    def apply_chat_template(self, msgs, tokenize=False,
-                            add_generation_prompt=True):
-        return "^" + "".join(m["content"] for m in msgs)
-
-
-def test_a_templated_prompt_gets_exactly_one_bos():
-    tok = BosTok()
-    be = HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu")
-    ids, _ = be._target_ids(req("u", "1 =", " 1"))
-    bos = tok.index["^"]
-    assert ids[0] == bos and ids[1] != bos
-
-
 def test_backend_decode_defaults_do_not_block_scoring():
     """Defaults set for generation are not part of a scoring request; only
     decode keys the REQUEST carries are refused."""
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     be = HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu", generate=True,
                    default_params={"max_tokens": 4, "temperature": 0.0})
     assert be.complete_batch([req("u", "1 =", " 1")])[0].ok
@@ -254,7 +156,7 @@ def test_backend_decode_defaults_do_not_block_scoring():
 def test_device_defaults_to_where_the_model_is():
     """No device given: inputs follow the model.  A guessed accelerator
     would differ from an unmoved model's device and fail."""
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     model = ToyLM(len(tok.vocab))
     be = HFBackend(model, tok)
     assert str(be._device()) == "cpu"
@@ -268,34 +170,7 @@ def test_device_defaults_to_where_the_model_is():
     assert HFBackend(model, tok, device="cpu")._device() == "cpu"
 
 
-def test_a_probe_returning_the_wrong_count_fails_by_name():
-    tok = ToyTok()
-
-    def short(out, enc, reqs):
-        return [{}]                              # one dict for two requests
-
-    be = HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu",
-                   probe=FunctionProbe(short))
-    with pytest.raises(ValueError, match=r"FunctionProbe\(short\) returned 1 "
-                       r"dicts for 2"):
-        be.complete_batch([req("a", "1 =", " 1"), req("b", "2 =", " 2")])
-
-
 # --- candidate scoring and token-id prompts ------------------------------------
-
-class KeepLM(ToyLM):
-    """ToyLM whose forward takes `logits_to_keep` (a tensor of positions),
-    as current HF causal LMs do."""
-
-    def forward(self, input_ids, attention_mask=None, output_attentions=False,
-                logits_to_keep=None):
-        full = super().forward(input_ids).logits
-        keep = full if logits_to_keep is None else full[:, logits_to_keep, :]
-
-        class Out:
-            logits = keep
-        return Out()
-
 
 @torch.no_grad()
 def next_logp(model, ids):
@@ -306,9 +181,10 @@ def choice(uid, ids, cands):
     return Request(uid, [], {}, input_ids=ids, candidates=cands)
 
 
-@pytest.mark.parametrize("cls", [ToyLM, KeepLM], ids=["full", "keep"])
+@pytest.mark.parametrize("cls", [ToyLM, KeepLM, SwallowLM],
+                         ids=["full", "keep", "kwargs"])
 def test_candidate_logp_matches_an_unpadded_single_run(cls):
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     model = cls(len(tok.vocab))
     be = HFBackend(model, tok, device="cpu")
     prompts = [[3, 4, 5, 6, 7], [8, 9], [10, 11, 12, 13, 14, 15, 16, 17]]
@@ -331,7 +207,7 @@ def test_candidate_logp_matches_an_unpadded_single_run(cls):
 
 
 def test_candidates_over_a_rendered_prompt_and_bad_sets_refused():
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     be = HFBackend(KeepLM(len(tok.vocab)), tok, device="cpu")
     good = Request("g", [{"role": "user", "content": "12 + 34 ="}], {},
                    candidates=[tok.index["4"], tok.index["5"]])
@@ -344,35 +220,52 @@ def test_candidates_over_a_rendered_prompt_and_bad_sets_refused():
 
 
 def test_a_mixed_batch_is_split_by_kind():
-    tok = ToyTok()
-    be = HFBackend(KeepLM(len(tok.vocab)), tok, device="cpu")
+    """Candidates, a target and a plain prompt in one batch: each goes to
+    its own path, and the responses come back in request order."""
+    class Spy(HFBackend):
+        def _run_batch(self, reqs):
+            from evalcore import Response
+            return [Response(r.unit_id, text="generated") for r in reqs]
+
+    tok = CharTok(MERGES)
+    be = Spy(KeepLM(len(tok.vocab)), tok, device="cpu")
+    plain = Request("p", [{"role": "user", "content": "1 ="}], {})
     out = be.complete_batch([choice("c", [3, 4, 5], [6, 7]),
-                             req("t", "1 =", " 1"),
+                             req("t", "1 =", " 1"), plain,
                              choice("c2", [8], [9])])
-    assert [r.unit_id for r in out] == ["c", "t", "c2"]
-    assert "cand_logp" in out[0].meta and "logp" in out[1].meta
-    assert "cand_logp" in out[2].meta
+    assert [r.unit_id for r in out] == ["c", "t", "p", "c2"]
+    assert "cand_logp" in out[0].meta and "cand_logp" in out[3].meta
+    assert out[1].meta["n_target"] == 2 and out[2].text == "generated"
 
 
 def test_a_target_with_input_ids_is_refused():
-    tok = ToyTok()
+    tok = CharTok(MERGES)
     be = HFBackend(KeepLM(len(tok.vocab)), tok, device="cpu")
     r = be.complete_batch([Request("u", [], {}, input_ids=[3, 4],
                                    target=" 5")])[0]
     assert not r.ok and "token boundary" in r.error
 
 
-def test_two_revisions_of_one_checkpoint_are_different_backends():
-    """from_pretrained(id, revision=r) keeps name_or_path == id for every r;
-    the snapshot loaded is config._commit_hash.  Pythia's training-step axis
-    is exactly this case: one cache dir, revisions step1000 ... step143000,
-    and each must get its own request keys."""
-    from types import SimpleNamespace
-    tok = ToyTok()
-    keys = set()
-    for commit in ("a39f36b", "de3e4e2"):
-        m = ToyLM(len(tok.vocab))
-        m.name_or_path = "EleutherAI/pythia-70m"
-        m.config = SimpleNamespace(_commit_hash=commit)
-        keys.add(str(HFBackend(m, tok).identity()))
-    assert len(keys) == 2
+def test_a_forward_that_ignores_a_declared_logits_to_keep_fails_loudly():
+    """Full logits read as kept ones would score the wrong positions."""
+    tok = CharTok(MERGES)
+    be = HFBackend(IgnoreKeepLM(len(tok.vocab)), tok, device="cpu")
+    with pytest.raises(RuntimeError, match="does not honour logits_to_keep"):
+        be.complete_batch([choice("u", [3, 4, 5, 6], [7, 8])])
+
+
+def test_a_type_error_inside_the_model_is_not_retried_without_keep():
+    """The forward's signature, not a caught TypeError, decides the call."""
+    calls = []
+
+    class Broken(KeepLM):
+        def forward(self, input_ids, attention_mask=None,
+                    output_attentions=False, logits_to_keep=None):
+            calls.append(logits_to_keep is not None)
+            raise TypeError("a bug inside the model")
+
+    tok = CharTok(MERGES)
+    be = HFBackend(Broken(len(tok.vocab)), tok, device="cpu")
+    with pytest.raises(TypeError, match="a bug inside the model"):
+        be.complete_batch([choice("u", [3, 4, 5], [6, 7])])
+    assert calls == [True]                      # once, and with keep

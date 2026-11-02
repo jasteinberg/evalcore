@@ -5,24 +5,38 @@ scored through the ordinary runner."""
 from __future__ import annotations
 
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from evalcore import grid
+from evalcore import Request, grid
+from evalcore.core.backends import request_key
 from evalcore.core.embed import FunctionEmbedder
 from evalcore.core.search import (
     BM25,
     DenseRetriever,
     ExactIndex,
+    FaissIndex,
+    FunctionScorer,
+    HFCrossEncoder,
+    Index,
+    Reranker,
     RetrieverBackend,
     _top,
+    ann_recall,
+    omp_clash,
     search_tool,
 )
 from evalcore.core.spec import digest
 from evalcore.evaluation.retrieval import retrieval_summary, score_ranked
 from evalcore.tasks.base import Task
-from evalcore.tasks.search_qa import make_world, search_qa, search_qa_items
+from evalcore.tasks.search_qa import make_world, search_qa_items
+from evalcore.testing import assert_same
 
 DOCS = {"d1": "the cat sat", "d2": "the dog sat on the dog mat",
         "d3": "a bird"}
@@ -74,38 +88,106 @@ def bow(dim=64):
     return FunctionEmbedder(fn, {"model": "bow", "dim": dim})
 
 
-def test_dense_retrieval_finds_the_document_and_names_its_corpus():
+def test_dense_retrieval_finds_the_document():
     r = DenseRetriever(DOCS, bow())
     assert r.retrieve(["a bird"], 1)[0][0][0] == "d3"
     assert r.ann_recall is None                          # exact: nothing to measure
-    other = DenseRetriever({**DOCS, "d4": "new"}, bow())
-    assert r.identity() != other.identity()
+
+
+VOCAB = {"a": 0, "bird": 1, "the": 2, "cat": 3}
+
+
+def onehot() -> FunctionEmbedder:
+    """Bag of words over a four-word vocabulary, by hand."""
+    def fn(texts, role):
+        out = np.zeros((len(texts), len(VOCAB)))
+        for i, t in enumerate(texts):
+            for w in t.split():
+                out[i, VOCAB[w]] += 1.0
+        return out
+    return FunctionEmbedder(fn, {"model": "onehot"})
+
+
+def test_dense_row_j_is_document_ids_j():
+    """B31.  Insertion order (z, a) is the reverse of id order (a, z), so a
+    retriever that builds rows in one order and names them in the other
+    swaps the two.  "a bird" is the document "z" exactly: cosine 1 with z
+    and 0 with "the cat" (no shared word)."""
+    r = DenseRetriever({"z": "a bird", "a": "the cat"}, onehot())
+    hits = r.retrieve(["a bird", "the cat"], 1)
+    assert [h[0][0] for h in hits] == ["z", "a"]
+    assert hits[0][0][1] == pytest.approx(1.0, abs=1e-6)   # float32 rounding
+
+
+def test_retriever_identity_covers_corpus_text_k_and_bm25_params():
+    """B33.  Each pair below differs in one thing that changes what is
+    retrieved (the depth k, a document's text, BM25's k1 or b), so each
+    pair's identities -- and with them the request keys -- must differ."""
+    docs = {"d1": "x", "d2": "the cat"}
+    req = Request("u", [{"role": "user", "content": "x"}], {})
+    pairs = [(RetrieverBackend(BM25(docs), k=5), RetrieverBackend(BM25(docs), k=3)),
+             (RetrieverBackend(BM25(docs), k=5),
+              RetrieverBackend(BM25({**docs, "d1": "y"}), k=5)),
+             (RetrieverBackend(BM25(docs, k1=1.2), k=5),
+              RetrieverBackend(BM25(docs, k1=2.0), k=5)),
+             (RetrieverBackend(BM25(docs, b=0.75), k=5),
+              RetrieverBackend(BM25(docs, b=0.5), k=5))]
+    for one, two in pairs:
+        assert one.identity() != two.identity()
+        assert request_key(req, 0, one) != request_key(req, 0, two)
+    dense = DenseRetriever(docs, FunctionEmbedder(
+        lambda t, r: np.ones((len(t), 2)), {"model": "const"}))
+    other = DenseRetriever({**docs, "d1": "y"}, FunctionEmbedder(
+        lambda t, r: np.ones((len(t), 2)), {"model": "const"}))
+    assert dense.identity() != other.identity()
+
+
+# --- approximate indexes ---------------------------------------------------------
+
+class Fixed(Index):
+    """An index that returns hand-set row ids, whatever the query."""
+
+    def __init__(self, idx: list[list[int]], exact: bool) -> None:
+        self.idx, self.exact = np.array(idx, np.int64), exact
+
+    def identity(self) -> dict:
+        return {"index": "fixed"}
+
+    def build(self, vectors: np.ndarray) -> None:
+        pass
+
+    def search(self, queries: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+        return self.idx[:, :k], np.zeros(self.idx[:, :k].shape)
+
+
+def test_ann_recall_by_hand():
+    """B32.  recall@3 = |A n E| / 3 per query.  Query 1: {0,1,2} n {0,3,4} =
+    {0}, 1/3.  Query 2: {0} (the rest is -1 padding, i.e. no result) n
+    {0,1,2} = {0}, 1/3 -- the padding counts as a miss, not a shrunken
+    denominator.  Query 3: {5,6,7} both, 1."""
+    approx = Fixed([[0, 1, 2], [0, -1, -1], [7, 5, 6]], exact=False)
+    exact = Fixed([[0, 3, 4], [0, 1, 2], [5, 6, 7]], exact=True)
+    got = ann_recall(approx, exact, np.zeros((3, 2)), k=3)
+    assert_same(got, np.array([1 / 3, 1 / 3, 1.0]), what="ann_recall")
 
 
 def test_faiss_tests_pass_in_a_process_without_torch():
     """FAISS and torch cannot share a process on macOS with pip wheels
     (search.omp_clash), and this suite imports torch.  When that applies,
     the FAISS tests run in a fresh interpreter instead of being skipped."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    from evalcore.core.search import omp_clash
     if omp_clash() is None:
         pytest.skip("no clash in this process: test_faiss.py runs directly")
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p",
                         "no:cacheprovider",
                         str(Path(__file__).with_name("test_faiss.py"))],
                        capture_output=True, text=True, timeout=300,
-                       check=False)
+                       check=False,
+                       env={**os.environ, "EVALCORE_FAISS_ALONE": "1"})
     assert r.returncode == 0, r.stdout[-3000:]
     assert " passed" in r.stdout and " skipped" not in r.stdout
 
 
 def test_faiss_refuses_to_load_beside_a_bundled_torch_runtime():
-    import sys
-
-    from evalcore.core.search import FaissIndex, omp_clash
     if omp_clash() is None:
         pytest.skip(f"no bundled-libomp pair here ({sys.platform})")
     with pytest.raises(ImportError, match="OMP Error #15"):
@@ -144,22 +226,12 @@ def test_a_retriever_runs_and_scores_through_the_runner(tmp_path):
                                 "hit@3", "ndcg@3", "rr"}
 
 
-def test_search_qa_gold_documents_contain_the_answer_chain():
-    task, _ = search_qa(n_towns=8)
-    world = make_world(8, 0)
-    for it in task.items:
-        text = " ".join(world.docs[d] for d in it.payload["gold_docs"])
-        gold = it.payload["gold"]
-        assert (f"{gold:,}" if isinstance(gold, int) else gold) in text
-
-
 # --- reranking ---------------------------------------------------------------------
 
 def test_a_reranker_reorders_only_what_the_first_stage_found():
     """First stage BM25 at depth 2 for "sat": d1 and d2 (d3 lacks the word).
     The scorer prefers shorter documents, so d1 (3 words) leads d2 (7).
     d3, the shortest, is outside the first stage and never appears."""
-    from evalcore.core.search import FunctionScorer, Reranker
     shorter = FunctionScorer(lambda q, docs: [-len(d.split()) for d in docs],
                              {"rule": "shorter"})
     r = Reranker(BM25(DOCS), shorter, DOCS, depth=2)
@@ -170,7 +242,6 @@ def test_a_reranker_reorders_only_what_the_first_stage_found():
 
 
 def test_reranker_ties_break_by_id():
-    from evalcore.core.search import FunctionScorer, Reranker
     flat = FunctionScorer(lambda q, docs: [0.0] * len(docs), {"rule": "flat"})
     hits = Reranker(BM25(DOCS), flat, DOCS, depth=3).retrieve(["the"], 2)[0]
     assert [d for d, _ in hits] == ["d1", "d2"]
@@ -178,9 +249,6 @@ def test_reranker_ties_break_by_id():
 
 def test_cross_encoder_scores_do_not_depend_on_the_batch():
     torch = pytest.importorskip("torch")
-    from types import SimpleNamespace
-
-    from evalcore.core.search import HFCrossEncoder
 
     class PairTok:
         def __call__(self, qs, ds, padding, truncation, max_length,

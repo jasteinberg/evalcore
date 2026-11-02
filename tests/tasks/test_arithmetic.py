@@ -71,3 +71,14 @@ def test_the_task_scores_by_teacher_forcing():
     assert t.name == "add_d2" and len(t.items) == 10
     req = t.render(t.units([Cell({"model": "m"})])[0])
     assert req.target.startswith(" ") and req.messages[0]["role"] == "user"
+
+
+def test_d11_regeneration_and_prefix_stability():
+    """D11.  Invariance: the same seed reproduces the items exactly, and
+    asking for more items extends the list without changing its prefix
+    (so a larger run contains the smaller one)."""
+    def make(n):
+        return arithmetic_items(digits=2, n_items=n, seed=5)
+    small = make(6)
+    assert make(6) == small
+    assert make(12)[:len(small)] == small

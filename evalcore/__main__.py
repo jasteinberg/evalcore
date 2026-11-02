@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         recalibrate=a.recalibrate or exp.options.recalibrate)
     res = exp.run()
     if res.dry_run:
-        print("plan:", {k: v for k, v in res.dry_run.items()})
+        print("plan:", res.dry_run)
     if res.halted:
         print(f"halted: {res.halted}")
     for name, table in res.analysis.items():

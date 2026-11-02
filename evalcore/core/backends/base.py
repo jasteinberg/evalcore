@@ -33,7 +33,6 @@ class Transient(RuntimeError):
         self.retry_after = retry_after
 
 
-
 class Fatal(RuntimeError):
     """Bad request, auth failure, content filter -- retrying will not help."""
 
@@ -150,6 +149,31 @@ def refuse_dropped(params: Mapping[str, Any], forwarded: Collection[str],
             f"differ only in these keys identical requests.")
 
 
+def unread_params(params: Mapping[str, Any], read: Collection[str]
+                  ) -> list[str]:
+    """The keys set in `params` (None counts as unset) outside `read`."""
+    return sorted(k for k, v in params.items() if v is not None and k not in read)
+
+
+def refuse_unread(params: Mapping[str, Any], read: Collection[str],
+                  who: str) -> None:
+    """Refuse any param the backend would not read (send, or compute with).
+
+    `refuse_dropped` covers the decode keys; this covers the rest.  Every
+    key in the request params moves the cell id and the cache key, so a key
+    nothing reads (a typo, a grid axis that belongs in the cell's tags, a
+    provider field nobody mapped) makes cells that look different and are
+    the same request.  None counts as unset, as in `refuse_dropped`."""
+    refuse_dropped(params, read, who)
+    unread = unread_params(params, read)
+    if unread:
+        raise Fatal(
+            f"{who} does not use param(s) {unread}: it reads only "
+            f"{sorted(read)}.  Remove them from the request params (a label "
+            f"belongs in the cell's tags), or teach the backend to use them "
+            f"once checked against the provider's API reference.")
+
+
 class Backend:
     name = "base"
     # True only for backends that read logits and so can score a
@@ -190,9 +214,9 @@ class Backend:
         """Why this backend cannot serve `req` at all, or None.
 
         Checked before any call: by the runner for every request (a refusal
-        becomes an error row, never a call), and by Experiment on the first
-        request at construction, so a task the backend cannot serve fails
-        before any spend.  A backend with requirements of its own extends
+        becomes an error row, never a call), and by Experiment on every
+        request at construction, so a task the backend cannot serve, even in
+        part, fails before any spend.  A backend with requirements of its own extends
         this and calls super()."""
         name = type(self).__name__
         if req.tools and not self.supports_tools:
@@ -216,6 +240,14 @@ class Backend:
 
     def close(self) -> None:
         pass
+
+
+def qualified_name(fn: Any) -> str:
+    """`module.qualname` of a function or callable object, the identity of
+    a backend or probe defined by one.  Editing the body keeps the name, so
+    a changed function must be renamed (or versioned) to re-key."""
+    return (f"{getattr(fn, '__module__', '?')}."
+            f"{getattr(fn, '__qualname__', type(fn).__qualname__)}")
 
 
 def filled(out: Sequence[Response | None]) -> list[Response]:

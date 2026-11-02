@@ -8,31 +8,23 @@ import json
 import pytest
 
 from evalcore import Request
-from evalcore.core.backends import HTTPBackend
 from evalcore.core.calibrate import Calibration, calibrate, derive
-
-httpx = pytest.importorskip("httpx")
 
 MSGS = [{"role": "user", "content": "Reply with the single word: ok"}]
 
 
-def backend(handler, flavour="openai"):
-    seen = []
-
-    def record(req):
-        seen.append(req)
-        return handler(req)
-
-    be = HTTPBackend(flavour, api_key="test-key",
-                     default_params={"model": "m", "max_tokens": 8})
-    real = be.client
-    be.client = httpx.Client(base_url=real.base_url, headers=real.headers,
-                             transport=httpx.MockTransport(record))
-    real.close()
-    return be, seen
+@pytest.fixture
+def mock_http():
+    """The scripted server.  Only the calibrate() tests need httpx; the
+    derive() tests below run without it."""
+    pytest.importorskip("httpx")
+    from support.http import mock_http
+    return mock_http
 
 
 def reply(finish="stop", headers=None, tokens=(12, 1)):
+    import httpx
+
     def handler(req):
         return httpx.Response(200, headers=headers or {}, json={
             "choices": [{"message": {"content": " ok "}, "finish_reason": finish}],
@@ -44,9 +36,9 @@ def reply(finish="stop", headers=None, tokens=(12, 1)):
 REQS = [Request(f"r{k}", MSGS, {}) for k in range(4)]
 
 
-def test_calls_go_through_the_backends_own_request_path():
-    be, seen = backend(reply(headers={"x-ratelimit-limit-requests": "500",
-                                      "date": "x"}))
+def test_calls_go_through_the_backends_own_request_path(mock_http):
+    be, seen = mock_http("openai", reply(headers={
+        "x-ratelimit-limit-requests": "500", "date": "x"}), api_key="test-key")
     cal = calibrate(be, REQS, n=4)
     assert cal.n_calls == 4 and len(seen) == 4 and not cal.errors
     assert (cal.in_tokens, cal.out_tokens, cal.truncated_rate) == (12, 1, 0.0)
@@ -56,13 +48,14 @@ def test_calls_go_through_the_backends_own_request_path():
     assert seen[0].headers["authorization"] == "Bearer test-key"
 
 
-def test_truncation_rate_is_measured():
-    be, _ = backend(reply(finish="length"))
+def test_truncation_rate_is_measured(mock_http):
+    be, _ = mock_http("openai", reply(finish="length"))
     assert calibrate(be, REQS, n=2).truncated_rate == 1.0
 
 
-def test_a_failing_endpoint_is_a_result_not_an_exception():
-    be, _ = backend(lambda req: httpx.Response(400, json={"error": {
+def test_a_failing_endpoint_is_a_result_not_an_exception(mock_http):
+    import httpx
+    be, _ = mock_http("openai", lambda req: httpx.Response(400, json={"error": {
         "message": "Unsupported parameter: 'max_tokens'"}}))
     cal = calibrate(be, REQS, n=2)
     assert cal.n_calls == 2 and len(cal.errors) == 2

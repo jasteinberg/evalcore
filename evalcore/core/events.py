@@ -23,18 +23,15 @@ regexes, so another tool's output can be queried the same way.
 
 from __future__ import annotations
 
-import json
 import re
-import threading
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from .records import json_default
+from .records import AppendLog, read_jsonl, utc_now
 
 __all__ = ["EventLog", "events_path", "format_summary", "parse_log", "read_events",
            "summarize_events"]
@@ -50,40 +47,20 @@ def events_path(out: str | Path) -> Path:
         p.name + EVENTS_SUFFIX)
 
 
-class EventLog:
-    """Thread-safe append-only event writer, flushed per event."""
-
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.Lock()
-        self.fh = self.path.open("a")
+class EventLog(AppendLog):
+    """The event writer: an AppendLog (thread-safe, flushed per event, a
+    killed run's fragment terminated so the next run_start is not lost)."""
 
     def emit(self, event: str, **fields: Any) -> None:
-        rec = {"t": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-               "event": event, **fields}
-        with self.lock:
-            self.fh.write(json.dumps(rec, default=json_default) + "\n")
-            self.fh.flush()
-
-    def close(self) -> None:
-        self.fh.close()
+        self.write({"t": utc_now("milliseconds"),
+                    "event": event, **fields})
 
 
 def read_events(path: str | Path) -> pd.DataFrame:
     """The event log as a frame (`t` parsed to datetimes).  Unreadable
     lines -- a write cut off by a kill -- are skipped and counted in
     `attrs["unreadable"]`."""
-    rows, bad = [], 0
-    with events_path(path).open() as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                bad += 1
+    rows, bad = read_jsonl(events_path(path))
     df = pd.DataFrame(rows)
     if not df.empty:
         df["t"] = pd.to_datetime(df["t"], utc=True)

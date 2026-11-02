@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
 import pytest
 
-from evalcore import FunctionBackend, Item, grid
-from evalcore.analyses import summary, value_curve
+from evalcore import Fatal, FunctionBackend, Item, grid
+from evalcore.analyses import (
+    AnalysisContext,
+    axis_curve,
+    summary,
+    value_curve,
+)
 from evalcore.pipeline import Experiment
 from evalcore.tasks.base import Task
 
@@ -78,7 +84,6 @@ def test_a_curve_along_a_non_axis_is_refused(tmp_path):
         exp.run()
 
 
-
 def test_rows_lost_before_scoring_are_counted_as_excluded(tmp_path):
     """Live run of 6 Oct: 9 of 49 rows truncated or unparsed, yet the
     summary said n_excluded = 0 and the >10% caveat stayed silent.  Here 2
@@ -98,3 +103,48 @@ def test_rows_lost_before_scoring_are_counted_as_excluded(tmp_path):
     s = exp.run().analysis["summary"].iloc[0]
     assert (s["n_rows"], s["n_excluded"]) == (4, 2)
     assert "33% of rows have no value" in s["caveats"]
+
+
+@pytest.mark.parametrize("fit", [value_curve("x", "v", n_boot=20),
+                                 axis_curve("x", n_boot=20)])
+def test_d28_curves_refuse_a_frame_without_status(fit, tmp_path):
+    """D28.  Contract: only ok rows carry scores, so a frame that cannot say
+    which rows are ok must be refused, not passed through whole.  The frame
+    has every column either curve needs except `status`, so nothing else
+    can be what refuses it."""
+    frame = pd.DataFrame({"x": [1, 10] * 3, "item_id": list("aabbcc"),
+                          "cluster": list("aabbcc"),
+                          "v": [0.0, 1.0, 0.0, 1.0, 0.5, 0.5],
+                          "meta_argmax_ok": [[True], [False]] * 3,
+                          "meta_n_target": [1] * 6})
+    ctx = AnalysisContext(by=["x"], manifest=tmp_path / "m",
+                          out=tmp_path / "r.jsonl")
+    with pytest.raises(KeyError, match="no 'status' column"):
+        fit(frame, ctx)
+
+
+def test_c6_an_item_failing_at_every_x_is_counted_through_the_experiment(
+        tmp_path):
+    """C6 through the analyse stage.  Four items on x in {1, 10, 100}; the
+    backend refuses item i3 at every x, so i3 has error rows only.  By hand:
+    3 items enter the curve and 1 is dropped, and the peak table says so."""
+    def model(req):
+        k = int(req.messages[-1]["content"].split()[-1])
+        if k == 3:
+            raise Fatal("refused")
+        return f"{math.log10(req.params['x']) / 2 + k / 10}"
+
+    items = [Item(f"i{k}", {"messages": [{"role": "user",
+                                          "content": f"value {k}"}]})
+             for k in range(4)]
+    exp = Experiment(Task("curve", items, score=lambda u, r: {"v": float(r.text)}),
+                     FunctionBackend(model, identity={"m": "drop"}),
+                     grid({"x": [1, 10, 100]}), tmp_path / "r.jsonl",
+                     calibrate=None, dry_run=None,
+                     analyses={"curve": value_curve("x", "v", n_boot=50)})
+    with pytest.warns(RuntimeWarning, match="1 items are not scored"):
+        res = exp.run()
+    assert (res.frame["item_id"] == "i3").sum() == 3
+    assert set(res.frame.loc[res.frame["item_id"] == "i3", "status"]) == {"error"}
+    peak = res.analysis["curve.peak"]
+    assert set(peak["n_items"]) == {3} and set(peak["n_dropped"]) == {1}

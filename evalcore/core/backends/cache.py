@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from pathlib import Path
+
+from ..records import write_atomic
 
 
 class Cache:
@@ -53,12 +53,6 @@ class Cache:
             return
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # The temp name must be unique per writer, not per key.  Two workers
-        # can hold the same key at once -- any design with repeats > 1 at a
-        # non-zero temperature produces identical requests by construction --
-        # and with a shared "<key>.tmp" the second os.replace raises
-        # FileNotFoundError because the first already moved the file out from
-        # under it.  Unique temp, last writer wins, still atomic.
-        tmp = p.with_suffix(f".{uuid.uuid4().hex}.tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, p)   # atomic: no half-written cache entry
+        # two workers can hold one key at once; write_atomic says why that
+        # needs a unique temp
+        write_atomic(p, lambda tmp: tmp.write_text(json.dumps(payload)))

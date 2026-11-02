@@ -35,6 +35,7 @@ from typing import Any, Literal
 import numpy as np
 
 from .backends.base import Fatal, Transient, _retrying
+from .records import write_atomic
 from .spec import digest
 
 __all__ = ["Embedder", "EmbeddingCache", "FunctionEmbedder", "HFEmbedder",
@@ -42,6 +43,7 @@ __all__ = ["Embedder", "EmbeddingCache", "FunctionEmbedder", "HFEmbedder",
 
 Role = Literal["query", "document"]
 ROLES = ("query", "document")
+TMP_SUFFIX = ".tmp.npz"       # np.savez appends .npz, so the temp must end so
 
 
 class EmbeddingCache:
@@ -60,6 +62,8 @@ class EmbeddingCache:
         self.rows: dict[str, np.ndarray] = {}
         self.hits = self.misses = 0
         for f in sorted(self.root.glob("*.npz")):
+            if f.name.endswith(TMP_SUFFIX):
+                continue        # a write killed before its rename: no chunk
             with np.load(f) as z:
                 self.rows.update(zip(z["keys"].tolist(), z["vectors"],
                                      strict=True))
@@ -74,10 +78,10 @@ class EmbeddingCache:
     def put(self, keys: Sequence[str], vectors: np.ndarray) -> None:
         if not len(keys):
             return
-        name = uuid.uuid4().hex
-        tmp = self.root / f"{name}.tmp.npz"
-        np.savez(tmp, keys=np.array(keys), vectors=vectors)
-        os.replace(tmp, self.root / f"{name}.npz")
+        write_atomic(self.root / f"{uuid.uuid4().hex}.npz",
+                     lambda tmp: np.savez(tmp, keys=np.array(keys),
+                                          vectors=vectors),
+                     suffix=TMP_SUFFIX)
         with self.lock:
             self.rows.update(zip(keys, vectors, strict=True))
 
@@ -142,6 +146,36 @@ class FunctionEmbedder(Embedder):
         return np.asarray(self.fn(texts, role))
 
 
+def _checkpoint(model: Any) -> dict[str, Any]:
+    """A local model's checkpoint: its path or hub id, and the snapshot
+    loaded (a hub id keeps one name_or_path at every revision)."""
+    return {"model": getattr(model, "name_or_path", None),
+            "commit": getattr(getattr(model, "config", None), "_commit_hash",
+                              None)}
+
+
+def _on_device(model: Any, device: Any, enc: Mapping[str, Any]
+               ) -> dict[str, Any]:
+    """A tokenizer encoding moved to `device`, else to the model's."""
+    dev = device or next(model.parameters()).device
+    return {k: v.to(dev) for k, v in enc.items()}
+
+
+def _dtype(model: Any) -> str:
+    """The weights' dtype, which changes the vectors (bfloat16 keeps 8
+    mantissa bits to float32's 24), so it is part of the identity.  A
+    transformers model has `.dtype`; a bare torch module reports its first
+    parameter's.  A model with neither is refused rather than given an
+    identity that would let two precisions share cache entries."""
+    dt = getattr(model, "dtype", None)
+    if dt is None and hasattr(model, "parameters"):
+        dt = next(iter(model.parameters())).dtype
+    if dt is None:
+        raise ValueError(f"cannot tell the dtype of {type(model).__name__}: "
+                         f"give it a `.dtype` or parameters")
+    return str(dt)
+
+
 class HFEmbedder(Embedder):
     """A transformers model's final hidden states, pooled.
 
@@ -172,16 +206,13 @@ class HFEmbedder(Embedder):
             self.tok.pad_token = self.tok.eos_token
 
     def identity(self) -> dict[str, Any]:
-        cfg = getattr(self.model, "config", None)
-        return {"embedder": "hf",
-                "model": getattr(self.model, "name_or_path", None),
-                "commit": getattr(cfg, "_commit_hash", None),
+        return {"embedder": "hf", **_checkpoint(self.model),
+                "dtype": _dtype(self.model),
                 "pooling": self.pooling, "prefixes": self.prefixes,
                 "max_length": self.max_length}
 
     def _embed(self, texts: list[str], role: Role) -> np.ndarray:
         import torch
-        dev = self.device or next(self.model.parameters()).device
         full = [self.prefixes[role] + t for t in texts]
         n_tok = [len(self.tok(t)["input_ids"]) for t in full]
         cut = sum(n > self.max_length for n in n_tok)
@@ -190,9 +221,9 @@ class HFEmbedder(Embedder):
             warnings.warn(f"{cut} text(s) longer than max_length="
                           f"{self.max_length} tokens were truncated",
                           RuntimeWarning, stacklevel=3)
-        enc = self.tok(full, padding=True, truncation=True,
-                       max_length=self.max_length, return_tensors="pt")
-        enc = {k: v.to(dev) for k, v in enc.items()}
+        enc = _on_device(self.model, self.device, self.tok(
+            full, padding=True, truncation=True, max_length=self.max_length,
+            return_tensors="pt"))
         with torch.no_grad():
             out = self.model(**enc, output_hidden_states=True)
         h = out.hidden_states[-1]                          # (n, T, d)
@@ -278,16 +309,13 @@ class HTTPEmbedder(Embedder):
     def _post(self, texts: list[str], role: Role) -> np.ndarray:
         import httpx
 
-        from .backends.http import _error_text, _retry_after
+        from .backends.http import _raise_for_status
         path, body = self._request(texts, role)
         try:
             r = self.client.post(path, json=body)
         except httpx.HTTPError as exc:
             raise Transient(f"transport: {exc}") from exc
-        if r.status_code in (408, 409, 429) or r.status_code >= 500:
-            raise Transient(_error_text(r), retry_after=_retry_after(r))
-        if r.status_code >= 400:
-            raise Fatal(_error_text(r))
+        _raise_for_status(r)
         js = r.json()
         if self.flavour == "openai":
             data = sorted(js["data"], key=lambda e: e["index"])

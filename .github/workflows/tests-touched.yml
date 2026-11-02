@@ -1,0 +1,20 @@
+name: tests-touched
+
+# A pull request that changes library code must change a test too.  Label
+# the pull request `no-tests-needed` for a pure refactor or a docstring edit.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  tests-touched:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-tests-needed') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_tests_touched.py --base origin/${{ github.base_ref }}

@@ -110,15 +110,21 @@ def report(candidates: Mapping[str, Sequence[Any]],
     Omitting `control` is supported and discouraged -- the numbers are then
     uncalibrated, and the missing row is the reason a reviewer cannot tell
     whether 0.31 is alarming or ordinary.
+
+    "control" is reserved for the control row: a candidate of that name
+    would be replaced by it, and its excess taken against itself.
     """
+    if "control" in candidates:
+        raise ValueError("a candidate is named 'control', which is reserved "
+                         "for the control row; rename it")
     rows: list[dict[str, Any]] = []
     named = dict(candidates)
     if control is not None:
         named = {**named, "control": control}
     for name, cand in named.items():
+        # "control" names a candidate only when passed as `control`
         row: dict[str, Any] = {"name": name, "length": len(cand),
-                               "is_control": name == "control"
-                               and control is not None}
+                               "is_control": name == "control"}
         for n in ns:
             row[f"overlap_{n}"] = ngram_overlap(cand, reference, n)
         row["longest_match"] = longest_match(cand, reference, max_n)

@@ -67,6 +67,8 @@ class BootResult:
     alpha: float = 0.05
     method: str = "bca"
     replicates: np.ndarray | None = field(default=None, repr=False)
+    # paired_bootstrap only: clusters one arm saw and the other did not
+    n_unpaired: int | None = None
 
     def as_row(self) -> dict:
         return {"point": self.point, "lo": self.lo, "hi": self.hi,
@@ -76,6 +78,28 @@ class BootResult:
     def __str__(self) -> str:
         return (f"{self.point:.4f}  [{self.lo:.4f}, {self.hi:.4f}]  "
                 f"(se {self.se:.4f}, k={self.n_clusters}, N={self.n_rows})")
+
+
+METHODS = ("bca", "percentile")
+
+
+def _check_method(method: str) -> None:
+    if method not in METHODS:
+        raise ValueError(f"unknown method {method!r}; use one of {METHODS}")
+
+
+def _require_clusters(df: pd.DataFrame, value: str, cluster: str) -> None:
+    """Refuse a row that carries a value but no cluster label.  The
+    bootstrap resamples clusters, so such a row cannot enter it, and
+    dropping it would leave it in neither n_rows nor n_excluded: the
+    accounting n_rows + n_excluded = rows of the cell would not close.  A
+    row with no value is already counted as excluded, label or not."""
+    lost = int((df[value].notna() & df[cluster].isna()).sum())
+    if lost:
+        raise ValueError(
+            f"{lost} row(s) carry {value!r} but no {cluster!r} label; every "
+            f"row must belong to a cluster (a source item and what was "
+            f"derived from it)")
 
 
 def _cluster_index(clusters: np.ndarray) -> list[np.ndarray]:
@@ -109,6 +133,27 @@ def _bca_bounds(theta: float, reps: np.ndarray, jack: np.ndarray,
     return tuple(np.quantile(reps, out))
 
 
+def _mean_boot(x: np.ndarray, n_boot: int, seed: int
+               ) -> tuple[float, np.ndarray, np.ndarray]:
+    """The mean of one value per cluster: point, bootstrap replicates (k
+    draws with replacement per replicate) and leave-one-out jackknife."""
+    k = x.size
+    reps = x[np.random.default_rng(seed).integers(0, k, size=(n_boot, k))]
+    return (float(x.mean()), reps.mean(axis=1),
+            np.array([np.delete(x, i).mean() for i in range(k)]))
+
+
+def _result(theta: float, reps: np.ndarray, jack: np.ndarray, k: int,
+            n_rows: int, alpha: float, method: str,
+            n_unpaired: int | None = None) -> BootResult:
+    if method == "bca":
+        lo, hi = _bca_bounds(theta, reps, jack, alpha)
+    else:
+        lo, hi = np.quantile(reps, [alpha / 2, 1 - alpha / 2])
+    return BootResult(theta, float(lo), float(hi), float(reps.std(ddof=1)),
+                      k, n_rows, alpha, method, reps, n_unpaired=n_unpaired)
+
+
 def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
                       stat: Callable[[np.ndarray], float] | None = None,
                       n_boot: int = 10_000, seed: int = 0, alpha: float = 0.05,
@@ -121,7 +166,12 @@ def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
     many augmentations it spawned.  This is almost always what you want:
     the row-weighted mean silently up-weights whichever items happened to
     augment most, which is a property of your generator, not the model.
+
+    A row with a value and no cluster label is refused (ValueError), never
+    dropped: see `_require_clusters`.
     """
+    _check_method(method)
+    _require_clusters(df, value, cluster)
     d = df[[value, cluster]].dropna()
     vals = d[value].to_numpy(dtype=float)
     idx = _cluster_index(d[cluster].to_numpy())
@@ -131,12 +181,8 @@ def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
 
     if stat is None:
         # fast path: mean of within-cluster means, via per-cluster means
-        cmeans = np.array([vals[ix].mean() for ix in idx])
-        theta = float(cmeans.mean())
-        rng = np.random.default_rng(seed)
-        draws = rng.integers(0, k, size=(n_boot, k))
-        reps = cmeans[draws].mean(axis=1)
-        jack = np.array([np.delete(cmeans, i).mean() for i in range(k)])
+        theta, reps, jack = _mean_boot(
+            np.array([vals[ix].mean() for ix in idx]), n_boot, seed)
     else:
         theta = float(stat(vals))
         rng = np.random.default_rng(seed)
@@ -147,15 +193,7 @@ def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
         jack = np.array([
             stat(np.concatenate([vals[idx[j]] for j in range(k) if j != i]))
             for i in range(k)])
-
-    if method == "bca":
-        lo, hi = _bca_bounds(theta, reps, jack, alpha)
-    elif method == "percentile":
-        lo, hi = np.quantile(reps, [alpha / 2, 1 - alpha / 2])
-    else:
-        raise ValueError(f"unknown method {method!r}")
-    return BootResult(theta, float(lo), float(hi), float(reps.std(ddof=1)),
-                      k, len(vals), alpha, method, reps)
+    return _result(theta, reps, jack, k, len(vals), alpha, method)
 
 
 def paired_bootstrap(df: pd.DataFrame, value: str, arm: str, a: str, b: str,
@@ -177,28 +215,36 @@ def paired_bootstrap(df: pd.DataFrame, value: str, arm: str, a: str, b: str,
     arms with equal SE, 95% intervals stop overlapping only around
     p ~ 0.006; for paired arms the overlap criterion ignores r entirely and
     can be arbitrarily conservative.  Always report the difference's own CI.
+
+    A cluster only one arm saw has no D_i, so it cannot enter (4).  Its rows
+    are left out of `n_rows` (which counts the rows behind the k
+    differences), its count is `n_unpaired`, and a RuntimeWarning names it:
+    if one arm fails on the hard items, the paired difference is taken on
+    the easy ones, and a reader has to know how many were lost.
     """
-    d = df[df[arm].isin([a, b])][[value, arm, cluster]].dropna()
+    _check_method(method)
+    sub = df[df[arm].isin([a, b])]
+    _require_clusters(sub, value, cluster)
+    d = sub[[value, arm, cluster]].dropna()
     piv = (d.groupby([cluster, arm], observed=True)[value]
              .mean().unstack(arm))
     if a not in piv or b not in piv:
         raise ValueError(f"arms {a!r}/{b!r} not both present")
+    seen = piv[[a, b]].notna()
+    n_unpaired = int((seen[a] != seen[b]).sum())
     piv = piv[[a, b]].dropna()
+    if n_unpaired:
+        warnings.warn(
+            f"{n_unpaired} cluster(s) seen by only one of {a!r}/{b!r} are "
+            f"left out of the paired difference ({len(piv)} paired)",
+            RuntimeWarning, stacklevel=2)
     if len(piv) < 2:
         raise ValueError("need >=2 clusters seen by both arms")
     diff = (piv[a] - piv[b]).to_numpy(dtype=float)
-    k = diff.size
-    theta = float(diff.mean())
-    rng = np.random.default_rng(seed)
-    reps = diff[rng.integers(0, k, size=(n_boot, k))].mean(axis=1)
-    jack = np.array([np.delete(diff, i).mean() for i in range(k)])
-    if method == "bca":
-        lo, hi = _bca_bounds(theta, reps, jack, alpha)
-    else:
-        lo, hi = np.quantile(reps, [alpha / 2, 1 - alpha / 2])
-    res = BootResult(theta, float(lo), float(hi), float(reps.std(ddof=1)),
-                     k, int(d.shape[0]), alpha, method, reps)
-    return res
+    theta, reps, jack = _mean_boot(diff, n_boot, seed)
+    return _result(theta, reps, jack, diff.size,
+                   int(d[cluster].isin(piv.index).sum()), alpha, method,
+                   n_unpaired)
 
 
 def paired_pvalue(res: BootResult) -> float:
@@ -349,10 +395,16 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
     False, which is the honest answer and the one a reader of the table
     would otherwise have to reconstruct.
 
+    A row with a value and no cluster label is refused (ValueError) before
+    any cell is computed; the per-cell fallback below would otherwise catch
+    it as a skipped CI and drop the row from both counts.
+
     `caveats` says, per cell, when a number is computed correctly but
     cannot be read at face value (see `cell_caveats`); cells with any
     caveat are also named in one RuntimeWarning.
     """
+    _check_method(method)
+    _require_clusters(df, value, cluster)
     want_floor = label is not None or floor is not None
     rows = []
     for key, sub in df.groupby(list(by), observed=True, dropna=False):

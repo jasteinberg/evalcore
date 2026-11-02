@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from evalcore.__main__ import main
-from evalcore.registry import ConfigError, Registry
+from evalcore.registry import REGISTRIES, ConfigError, Registry, register
 
 
 def reg():
@@ -50,3 +50,20 @@ def test_list_prints_every_name_with_its_keys(capsys):
     out = capsys.readouterr().out
     assert "bm25(k1=1.2, b=0.75)   [given: docs]" in out
     assert "rerank(first, pair_scorer, depth)" in out
+
+
+def test_registering_a_taken_name_needs_replace():
+    with pytest.raises(ValueError, match="already registered"):
+        register("backend", "echo")(lambda: None)
+
+
+def test_d17_no_built_in_factory_takes_kwargs():
+    """D17.  Contract: a factory's signature is its schema, so no built-in
+    (any factory defined in the evalcore package) may take **kwargs."""
+    loose = sorted(f"{kind}:{name}"
+                   for kind, reg in REGISTRIES.items()
+                   for name, f in reg.factories.items()
+                   if (getattr(f, "__module__", "") or "").startswith("evalcore")
+                   and "**" in reg.schema(name)[0])
+    assert loose == []
+    assert len(REGISTRIES["backend"].factories) >= 4   # built-ins were seen

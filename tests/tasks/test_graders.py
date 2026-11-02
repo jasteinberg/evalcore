@@ -6,8 +6,24 @@ import io
 
 import pytest
 
-from evalcore import FunctionBackend, Item, ParseFailure, Request, execute, grid, units
-from evalcore.tasks.graders import grade, make_score
+from evalcore import (
+    FunctionBackend,
+    Item,
+    ParseFailure,
+    Request,
+    Response,
+    execute,
+    grid,
+    units,
+)
+from evalcore.tasks.graders import (
+    GRADERS,
+    check_spec,
+    grade,
+    grader,
+    make_score,
+    score_teacher_forced,
+)
 
 
 @pytest.mark.parametrize("spec,text,gold,correct", [
@@ -95,3 +111,73 @@ def test_label_reads_one_named_option_inside_free_text():
 def test_label_with_none_or_several_options_is_unparsed(text):
     with pytest.raises(ParseFailure):
         grade(LABELS, text, "fetch_page")
+
+
+@pytest.mark.parametrize("spec,text,gold,match", [
+    ({"name": "numeric", "pick": "frist"}, "1 then 2", 2, "pick must be"),
+    ({"name": "label", "options": ["fetch", "parse"]}, "fetch", "zeta",
+     "not one of the options"),
+    ("choice", "Answer: A", "E", "'E' is not one of the options"),
+])
+def test_d4_grader_options_are_validated(spec, text, gold, match):
+    """D4.  Contract: pick is "first" or "last", and a label or choice gold
+    must be one of the options (else no response can be right).  Each case
+    must raise, not grade."""
+    with pytest.raises(ValueError, match=match):
+        grade(spec, text, gold)
+
+
+def test_d5_a_taken_grader_name_needs_replace_true(monkeypatch):
+    """D5.  Contract: one implementation per grader name, as the component
+    registry already enforces (Registry.add refuses a taken name).  The
+    override is possible, but only by saying so."""
+    monkeypatch.setitem(GRADERS, "exact", GRADERS["exact"])   # restored after
+    with pytest.raises(ValueError):
+        grader("exact")(lambda text, gold: {"correct": 1.0})
+    grader("exact", replace=True)(lambda text, gold: {"correct": 1.0})
+    assert grade("exact", "anything", "x") == {"correct": 1.0}
+
+
+def test_d14_score_teacher_forced_by_hand():
+    """D14.  Hand-computed: argmax_ok [1, 0, 1, 1] gives tok_acc 3/4; one
+    miss means no exact match, em_tf 0; sum_logp and n_target pass through."""
+    meta = {"argmax_ok": [1, 0, 1, 1], "em_tf": False, "sum_logp": -3.5,
+            "n_target": 4}
+    out = score_teacher_forced(None, Response("u", text=None, meta=meta))
+    assert out == {"em_tf": 0.0, "tok_acc": 0.75, "sum_logp": -3.5,
+                   "n_target": 4}
+
+
+@pytest.mark.parametrize("text,pred", [
+    ("answer: (c)", "C"),                 # lower case in parentheses
+    ("The answer is c.", "C"),            # lower case before punctuation
+    ("the answer is c", "C"),             # lower case at the end
+    ("ANSWER IS D", "D"),                 # the keyword in any case
+    ("The answer is a tricky one; maybe C", "C"),   # article, then a letter
+    ("The answer is a tricky one, but B", "B"),
+])
+def test_d1_the_letter_rule_by_hand(text, pred):
+    """D1.  The rule in `choice`'s docstring, case by case."""
+    assert grade("choice", text, pred) == {"correct": 1.0, "pred": pred}
+
+
+@pytest.mark.parametrize("spec,gold,match", [
+    ({"name": "numeric", "rell": 0.01}, 1, r"no option\(s\) \['rell'\]"),
+    ({"name": "set_f1"}, ["s001"], r"needs option\(s\) \['pattern'\]"),
+    ({"name": "numeric", "pick": "frist"}, 1, "pick must be"),
+    ({"name": "label", "options": ["a", "b"]}, "c", "not one of the options"),
+    ("contains", " ... ", "normalises to an empty string"),
+    ("numeric", [1, 2], "grader 'numeric'"),        # float() of a list
+])
+def test_check_spec_refuses_without_a_response(spec, gold, match):
+    with pytest.raises(ValueError, match=match):
+        check_spec(spec, gold)
+
+
+@pytest.mark.parametrize("spec,gold", [
+    ("numeric", 3), ({"name": "set_f1", "pattern": r"s\d"}, ["s1"]),
+    ("abstain", None), ({"name": "label", "options": ["a", "b"]}, "a"),
+    ("choice", "b"), ({"name": "exact", "case": True}, ["Paris", "x"]),
+])
+def test_check_spec_passes_a_sound_spec(spec, gold):
+    check_spec(spec, gold)

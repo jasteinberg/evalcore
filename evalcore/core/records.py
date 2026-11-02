@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,29 @@ STATUSES = ("ok", "error", "tool_error", "truncated", "unparsed")
 _MANIFEST_LOCK = threading.Lock()
 
 
+def utc_now(timespec: str = "seconds") -> str:
+    """The current UTC time in ISO 8601, the one timestamp format every file
+    written here uses."""
+    return datetime.now(timezone.utc).isoformat(timespec=timespec)
+
+
+def write_atomic(path: Path, write: Callable[[Path], object],
+                 suffix: str = ".tmp") -> None:
+    """Write `path` through a sibling temp file, then rename it over `path`,
+    so a reader sees the old file or the new one, never half of one.
+
+    The temp name is unique per call, not per path.  Two writers can hold
+    one path at once (repeats of an identical request at a non-zero
+    temperature are identical by construction), and with a shared temp
+    the second os.replace raises FileNotFoundError because the first
+    already moved the file away.  Unique temp, last writer wins, still
+    atomic.  `suffix` ends the temp name: np.savez appends ".npz" to a
+    name not already ending so, and readers skip names ending ".tmp.npz"."""
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}{suffix}")
+    write(tmp)
+    os.replace(tmp, path)
+
+
 class SinkState:
     """What a sink already holds, read without opening it for writing:
     for each unit_id its LAST row's request_key (None for rows written
@@ -39,18 +64,13 @@ class SinkState:
     def __init__(self, path: str | Path) -> None:
         self.seen: dict[str, str | None] = {}
         self.errored: set[str] = set()
-        self.unreadable = 0
-        p = Path(path)
-        if p.exists():
-            with p.open() as fh:
-                for line in fh:
-                    if not line.strip():
-                        continue
-                    try:
-                        self.note(json.loads(line))
-                    except (json.JSONDecodeError, KeyError, TypeError,
-                            AttributeError):
-                        self.unreadable += 1
+        rows, self.unreadable = (read_jsonl(path) if Path(path).exists()
+                                 else ([], 0))
+        for row in rows:
+            try:
+                self.note(row)
+            except (KeyError, TypeError, AttributeError):   # not a row
+                self.unreadable += 1
 
     def note(self, row: Mapping[str, Any]) -> None:
         uid = row["unit_id"]
@@ -61,26 +81,41 @@ class SinkState:
             self.errored.discard(uid)
 
 
-class JsonlSink(SinkState):
-    """Thread-safe append-only sink, flushed per row; keeps its SinkState
-    current as rows are written."""
+class AppendLog:
+    """Thread-safe append-only JSONL writer, flushed per record.  A fragment
+    a kill left mid-write is terminated before the first append, so the
+    next record is not glued onto it and lost."""
 
     def __init__(self, path: str | Path) -> None:
-        super().__init__(path)
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         _terminate_partial_line(self.path)
         self.fh = self.path.open("a")
 
-    def write(self, row: dict) -> None:
+    def write(self, rec: Mapping[str, Any]) -> None:
         with self.lock:
-            self.fh.write(json.dumps(row, default=json_default) + "\n")
+            self.fh.write(json.dumps(rec, default=json_default) + "\n")
             self.fh.flush()
-            self.note(row)
+            self._written(rec)
+
+    def _written(self, rec: Mapping[str, Any]) -> None:
+        """Called under the lock after each record is on disk."""
 
     def close(self) -> None:
         self.fh.close()
+
+
+class JsonlSink(SinkState, AppendLog):
+    """The run's sink: an AppendLog that keeps its SinkState current as rows
+    are written."""
+
+    def __init__(self, path: str | Path) -> None:
+        SinkState.__init__(self, path)      # read before the fragment is closed
+        AppendLog.__init__(self, path)
+
+    def _written(self, rec: Mapping[str, Any]) -> None:
+        self.note(rec)
 
 
 def _terminate_partial_line(path: Path) -> bool:
@@ -170,26 +205,30 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
     return path
 
 
-def _read_records(path: str | Path) -> list[dict]:
-    """Tolerant line reader: a truncated or corrupt manifest degrades to the
-    records that do parse.  It is a record of intent, and a partial record of
-    intent is still better than none."""
-    path = Path(path)
-    if not path.exists():
-        return []
-    out = []
-    with path.open() as fh:
+def read_jsonl(path: str | Path) -> tuple[list[Any], int]:
+    """(the parsed values of every non-blank line, the number of lines that
+    did not parse).  A missing file raises: callers that allow one check."""
+    rows, bad = [], 0
+    with Path(path).open() as fh:
         for raw in fh:
             line = raw.strip()
             if not line:
                 continue
             try:
-                rec = json.loads(line)
+                rows.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict) and "unit_id" in rec:
-                out.append(rec)
-    return out
+                bad += 1
+    return rows, bad
+
+
+def _read_records(path: str | Path) -> list[dict]:
+    """Tolerant line reader: a truncated or corrupt manifest degrades to the
+    records that do parse.  It is a record of intent, and a partial record of
+    intent is still better than none."""
+    if not Path(path).exists():
+        return []
+    return [r for r in read_jsonl(path)[0]
+            if isinstance(r, dict) and "unit_id" in r]
 
 
 def read_manifest(path: str | Path) -> pd.DataFrame:
@@ -215,16 +254,7 @@ def to_frame(path: str | Path, drop_errors: bool = False) -> pd.DataFrame:
     then absent from the frame, which `attrition(..., manifest=...)` reports
     as missing, and resume re-runs it.
     """
-    rows, bad = [], 0
-    with Path(path).open() as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                bad += 1
+    rows, bad = read_jsonl(path)
     if bad:
         warnings.warn(
             f"{str(path)!r}: skipped {bad} unreadable line(s); a write "
@@ -236,13 +266,13 @@ def to_frame(path: str | Path, drop_errors: bool = False) -> pd.DataFrame:
     df = df.drop_duplicates(subset="unit_id", keep="last").reset_index(drop=True)
     # rows written before `status` existed: derived from `error` alone, the
     # only distinction those rows recorded
-    df["status"] = _status(df)
+    df["status"] = row_status(df)
     if "error" in df and drop_errors:
         df = df[df["error"].isna()].reset_index(drop=True)
     return df
 
 
-def _status(df: pd.DataFrame) -> pd.Series:
+def row_status(df: pd.DataFrame) -> pd.Series:
     """Row status, derived for frames that predate the column.  A row with an
     error is never "ok": it keeps a failure status it was given
     (`tool_error`) and is "error" otherwise."""
@@ -254,20 +284,24 @@ def _status(df: pd.DataFrame) -> pd.Series:
     return st.where(~err | st.isin(["error", "tool_error"]), "error")
 
 
-# A unit with several rows (a judge panel) takes its worst row's status.
-
-
 # --- numpy values and array sidecars ------------------------------------------
-# A response's meta may carry numpy values from a probe.  JSON
-# would stringify a numpy scalar silently (a float32 0.25 came back as the
-# string "0.25") and refuse an array outright, so: scalars become Python
-# numbers, nested arrays become lists, and top-level arrays -- per-head or
-# per-layer tensors, megabytes per unit -- go to an .npz sidecar named by the
-# unit's request key, with only its path left in the row.
+# A response's meta may carry numpy or torch values from a probe.  JSON
+# would stringify a scalar silently (a float32 0.25 came back as the string
+# "0.25", a torch scalar as "tensor(0.2500)") and refuse an array outright,
+# so: scalars become Python numbers at any depth, nested arrays become
+# lists, and top-level arrays -- per-head or per-layer tensors, megabytes per
+# unit -- go to an .npz sidecar named by the unit's request key, with only
+# its path left in the row.  Torch is duck-typed (`detach`): no torch import.
+
+def _is_tensor(o: object) -> bool:
+    return hasattr(o, "detach") and hasattr(o, "shape")
+
 
 def json_default(o: object) -> object:
-    """`default=` for json.dumps: numpy scalars to Python, arrays to lists,
-    anything else to its string (the previous behaviour)."""
+    """`default=` for json.dumps: numpy and torch scalars to Python, arrays
+    to lists, anything else to its string (the previous behaviour)."""
+    if _is_tensor(o):
+        o = o.detach().cpu().numpy()          # type: ignore[attr-defined]
     if isinstance(o, np.generic):
         return o.item()
     if isinstance(o, np.ndarray):
@@ -275,25 +309,37 @@ def json_default(o: object) -> object:
     return str(o)
 
 
+def _plain(v: object) -> object:
+    """`v` with every numpy/torch scalar, at any depth of dicts, lists and
+    tuples, made a Python number, and nested arrays made lists, so the
+    cache (plain `json.dumps`) and the sink store the same thing."""
+    if isinstance(v, dict):
+        return {k: _plain(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_plain(x) for x in v]
+    if _is_tensor(v) or isinstance(v, (np.generic, np.ndarray)):
+        return json_default(v)
+    return v
+
+
 def _as_array(v: object) -> np.ndarray | None:
     if isinstance(v, np.ndarray) and v.ndim > 0:
         return v
-    if hasattr(v, "detach") and hasattr(v, "shape") and len(v.shape) > 0:
-        return v.detach().cpu().numpy()          # a torch tensor
+    if _is_tensor(v) and len(v.shape) > 0:       # type: ignore[attr-defined]
+        return v.detach().cpu().numpy()          # type: ignore[attr-defined]
     return None
 
 
 def split_arrays(meta: dict) -> tuple[dict, dict]:
-    """(meta with arrays removed and numpy scalars made Python, arrays)."""
+    """(meta with top-level arrays removed and every scalar made Python,
+    arrays)."""
     plain, arrays = {}, {}
     for k, v in meta.items():
         a = _as_array(v)
         if a is not None:
             arrays[k] = a
-        elif isinstance(v, np.generic):
-            plain[k] = v.item()
         else:
-            plain[k] = v
+            plain[k] = _plain(v)
     return plain, arrays
 
 
@@ -309,9 +355,8 @@ class ArrayStore:
     def put(self, key: str, arrays: dict) -> Path:
         p = self.path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp.npz")
-        np.savez_compressed(tmp, **arrays)
-        os.replace(tmp, p)                      # atomic, like the cache
+        write_atomic(p, lambda tmp: np.savez_compressed(tmp, **arrays),
+                     suffix=".tmp.npz")
         return p
 
 

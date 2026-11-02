@@ -6,8 +6,10 @@ import io
 import json
 
 import pytest
+from support.scripted import Counting, items
 
 from evalcore import FunctionBackend, grid
+from evalcore.core.runner import plan
 from evalcore.tasks.base import Task
 from evalcore.tasks.formats import TaskFormatError, load_tasks, save_tasks
 
@@ -94,3 +96,38 @@ def test_a_task_from_a_file_runs_and_tags_every_row(tmp_path):
     assert got["correct"].to_dict() == {"a": 1.0, "b": 0.0}
     assert set(df["task"]) == {"arith"} and set(df["task_version"]) == {"2"}
     assert set(df["model"]) == {"toy"}             # cell params reach the row
+
+
+@pytest.mark.parametrize("gold", ["", "?!"])
+def test_d2_empty_or_punctuation_gold_is_refused_at_load(gold):
+    """D2.  Contract: a gold that normalises to the empty string matches
+    every response under `contains` ('' is a substring of anything), so it
+    cannot be graded; load_tasks must refuse it."""
+    with pytest.raises(TaskFormatError):
+        load_tasks([{"id": "q", "prompt": "p", "gold": gold,
+                     "grader": "contains"}])
+
+
+def test_d6_grader_option_typo_is_refused_at_load():
+    """D6.  Contract: `numeric` has no option `rell`; load_tasks checks the
+    grader name at load, so it must check the option keys there too, and
+    name the bad key."""
+    with pytest.raises(TaskFormatError, match="rell"):
+        load_tasks([{"id": "q", "prompt": "p", "gold": 1,
+                     "grader": {"name": "numeric", "rell": 0.01}}])
+
+
+def test_d20_task_name_and_version_carry_no_identity(tmp_path):
+    """D20.  Invariance: renaming and re-versioning a task are tags, so the
+    unit ids and request keys are equal across the two."""
+    its = items(4)
+    backend = FunctionBackend(Counting(), identity={"model": "scripted"})
+    cells = grid({"model": ["toy"]})
+    plans = []
+    for task, out in ((Task("a", its), "a.jsonl"),
+                      (Task("b", its, version="2"), "b.jsonl")):
+        plans.append(plan(task.units(cells), backend, task.render,
+                          tmp_path / out))
+    a, b = plans
+    assert [u.id for u in a.units] == [u.id for u in b.units]
+    assert a.keys == b.keys and len(a.keys) == 4

@@ -81,3 +81,11 @@ def test_report_without_control_omits_excess_columns():
     assert "overlap_2" in df.columns
     assert not any(c.endswith("_excess") for c in df.columns)
     assert not df.loc["a", "is_control"]
+
+
+def test_c31_a_candidate_named_control_is_refused():
+    """C31.  The control row is keyed "control"; a candidate with that name
+    would be overwritten by it (and the excess computed against itself), so
+    report must refuse the clash."""
+    with pytest.raises(ValueError, match="control"):
+        report({"control": "abcdefgh"}, "abcdefghij", control="zzzzzzzz", ns=(2,))

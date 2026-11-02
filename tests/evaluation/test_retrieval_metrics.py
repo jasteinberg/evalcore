@@ -9,7 +9,7 @@ import pytest
 
 from evalcore.evaluation.retrieval import rank_metrics, retrieval_summary
 
-L2, L3 = 1.0, math.log2(3)
+L3 = math.log2(3)
 
 
 def test_binary_relevance_by_hand():
@@ -57,3 +57,15 @@ def test_summary_refuses_mrr_across_depths_within_a_cell():
                        "status": "ok", "rr": [1.0, 0.5], "depth": [5, 10]})
     with pytest.raises(ValueError, match="different depths"):
         retrieval_summary(df, ["cell"], metrics=["rr"])
+
+
+def test_c30_gain_zero_entries_are_not_relevant():
+    """C30.  Judgments {a: 0, b: 1}: a is judged and NOT relevant, so
+    R = {b}.  Ranked [a]: recall@1 = 0/1, hit@1 = 0, nDCG@1 = 0/(1/log2 2)
+    = 0, and no relevant document is returned so RR = 0.  Ranked [b]:
+    |R| = 1, so recall@1 = 1/1 = 1 (counting a in R would give 1/2),
+    hit@1 = 1, nDCG@1 = 1, RR = 1."""
+    m = rank_metrics(["a"], {"a": 0, "b": 1}, ks=(1,))
+    assert m == {"recall@1": 0.0, "hit@1": 0.0, "ndcg@1": 0.0, "rr": 0.0}
+    m = rank_metrics(["b"], {"a": 0, "b": 1}, ks=(1,))
+    assert m == {"recall@1": 1.0, "hit@1": 1.0, "ndcg@1": 1.0, "rr": 1.0}

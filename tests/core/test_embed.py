@@ -4,11 +4,19 @@ changes one, and the HTTP adapters speak each provider's format."""
 from __future__ import annotations
 
 import json
+import types
 
 import numpy as np
 import pytest
 
-from evalcore.core.embed import EmbeddingCache, FunctionEmbedder, HTTPEmbedder
+from evalcore.core.embed import (
+    EmbeddingCache,
+    FunctionEmbedder,
+    HFEmbedder,
+    HTTPEmbedder,
+)
+
+httpx = pytest.importorskip("httpx")
 
 
 def counting(dim=4, ident=None):
@@ -54,54 +62,37 @@ def test_a_wrong_shape_from_the_model_is_refused():
         emb.embed(["a", "b"])
 
 
+def test_the_cache_survives_a_killed_write(tmp_path):
+    """B36.  One complete chunk (key "k", vector [1, 2]) and the half-written
+    temp file a kill inside `np.savez` leaves.  Reopening must give exactly
+    the complete chunk's row: the temp is not a committed chunk."""
+    root = tmp_path / "emb"
+    EmbeddingCache(root).put(["k"], np.array([[1.0, 2.0]], np.float32))
+    np.savez(root / "whole.npz", keys=np.array(["j"]),
+             vectors=np.zeros((1, 2), np.float32))
+    blob = (root / "whole.npz").read_bytes()
+    (root / "whole.npz").unlink()
+    (root / "dead.tmp.npz").write_bytes(blob[:len(blob) // 2])
+    rows = EmbeddingCache(root).rows
+    assert list(rows) == ["k"]
+    assert np.array_equal(rows["k"], np.array([1.0, 2.0], np.float32))
+
+
 # --- HF ---------------------------------------------------------------------------
 
-torch = pytest.importorskip("torch")
-
-
-class Tok:
-    """Characters as tokens; pads on `side`, returns torch tensors."""
-
-    def __init__(self, side="right"):
-        self.padding_side, self.pad_token, self.eos_token = side, "#", "#"
-
-    def __call__(self, texts, padding=False, truncation=False, max_length=None,
-                 return_tensors=None):
-        if isinstance(texts, str):
-            return {"input_ids": [ord(c) % 50 + 1 for c in texts]}
-        ids = [[ord(c) % 50 + 1 for c in t] for t in texts]
-        if truncation:
-            ids = [x[:max_length] for x in ids]
-        T = max(map(len, ids))
-        pad = [[0] * (T - len(x)) for x in ids]
-        rows = [x + p if self.padding_side == "right" else p + x
-                for x, p in zip(ids, pad, strict=True)]
-        mask = [[int(t != 0) for t in r] for r in rows]
-        return {"input_ids": torch.tensor(rows),
-                "attention_mask": torch.tensor(mask)}
-
-
-class Enc(torch.nn.Module):
-    """A causal toy: h_t is the masked running mean of the embeddings up to
-    t, so a padded position cannot change a real one."""
-
-    def __init__(self):
-        super().__init__()
-        g = torch.Generator().manual_seed(0)
-        self.emb = torch.nn.Parameter(torch.randn(64, 8, generator=g))
-
-    def forward(self, input_ids, attention_mask, output_hidden_states=False):
-        m = attention_mask.unsqueeze(-1).float()
-        e = self.emb[input_ids] * m
-        h = e.cumsum(1) / m.cumsum(1).clamp(min=1)
-        return type("Out", (), {"hidden_states": (e, h)})()
+def toy_hf():
+    """(torch, MeanEncoder, EmbedTok), skipping where torch is absent.  Per
+    test rather than per module, so the HTTP tests below still run there."""
+    torch = pytest.importorskip("torch")
+    from support.toy_hf import EmbedTok, MeanEncoder
+    return torch, MeanEncoder, EmbedTok
 
 
 @pytest.mark.parametrize("pooling", ["mean", "cls", "last"])
 @pytest.mark.parametrize("side", ["right", "left"])
 def test_hf_pooling_is_the_same_batched_as_alone(pooling, side):
-    from evalcore.core.embed import HFEmbedder
-    emb = HFEmbedder(Enc(), Tok(side), pooling=pooling, device="cpu")
+    _, MeanEncoder, EmbedTok = toy_hf()
+    emb = HFEmbedder(MeanEncoder(), EmbedTok(side), pooling=pooling, device="cpu")
     texts = ["a", "hello there", "abc"]
     batch = emb._embed(texts, "document")
     alone = np.vstack([emb._embed([t], "document") for t in texts])
@@ -114,27 +105,46 @@ def test_hf_pooling_is_the_same_batched_as_alone(pooling, side):
 
 
 def test_hf_truncation_is_counted_and_warned():
-    from evalcore.core.embed import HFEmbedder
-    emb = HFEmbedder(Enc(), Tok(), max_length=3, device="cpu")
+    _, MeanEncoder, EmbedTok = toy_hf()
+    emb = HFEmbedder(MeanEncoder(), EmbedTok(), max_length=3, device="cpu")
     with pytest.warns(RuntimeWarning, match="1 text"):
         emb._embed(["ab", "abcdef"], "query")
     assert emb.n_truncated == 1
 
 
 def test_hf_prefixes_and_commit_are_in_the_identity():
-    from evalcore.core.embed import HFEmbedder
-    a = HFEmbedder(Enc(), Tok(), prefixes={"query": "query: "})
-    b = HFEmbedder(Enc(), Tok())
+    """B26 (commit).  Two checkpoints of one model name (commits "a" and
+    "b") hold different weights, so their identities must differ."""
+    _, MeanEncoder, EmbedTok = toy_hf()
+    a = HFEmbedder(MeanEncoder(), EmbedTok(), prefixes={"query": "query: "})
+    b = HFEmbedder(MeanEncoder(), EmbedTok())
     assert a.identity() != b.identity()
     assert a.identity()["prefixes"]["document"] == ""
+    ca, cb = MeanEncoder(), MeanEncoder()
+    ca.config = types.SimpleNamespace(_commit_hash="a")
+    cb.config = types.SimpleNamespace(_commit_hash="b")
+    assert (HFEmbedder(ca, EmbedTok(), device="cpu").identity()
+            != HFEmbedder(cb, EmbedTok(), device="cpu").identity())
+
+
+def test_hf_identity_covers_the_dtype():
+    """B26.  The same weights in float32 and in bfloat16 give different
+    vectors (bfloat16 keeps 8 mantissa bits; the premise is asserted), so
+    the two embedders must have different identities -- else they share
+    cache entries."""
+    torch, MeanEncoder, EmbedTok = toy_hf()
+    f32 = HFEmbedder(MeanEncoder(), EmbedTok(), device="cpu")
+    b16 = HFEmbedder(MeanEncoder().to(torch.bfloat16), EmbedTok(), device="cpu")
+    assert not np.array_equal(f32._embed(["hello"], "document"),
+                              b16._embed(["hello"], "document"))
+    assert f32.identity() != b16.identity()
 
 
 # --- HTTP -----------------------------------------------------------------------------
 
-httpx = pytest.importorskip("httpx")
-
-
 def http(flavour, handler, **kw):
+    """An HTTPEmbedder whose transport records each request and answers
+    with `handler(request)`."""
     seen = []
 
     def record(req):

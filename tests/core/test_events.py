@@ -5,16 +5,19 @@ from __future__ import annotations
 
 import io
 import json
-import threading
 
 import pandas as pd
 import pytest
+from support.runner import (
+    Dies,
+    items,
+    no_backoff,  # noqa: F401 - a fixture, requested by name
+    render,
+    run,
+)
 
 from evalcore import (
-    Backend,
     FunctionBackend,
-    Item,
-    Request,
     Response,
     Transient,
     execute,
@@ -30,21 +33,8 @@ from evalcore.core.events import (
 )
 
 
-def its(n):
-    return [Item(f"q{i}", {"q": f"question {i}"}) for i in range(n)]
-
-
-def render(u):
-    return Request(u.id, [{"role": "user", "content": u.item.payload["q"]}], {})
-
-
-@pytest.fixture
-def no_sleep(monkeypatch):
-    from evalcore.core.backends import base
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-
-
-def test_every_unit_and_the_run_boundaries_are_recorded(tmp_path, no_sleep):
+@pytest.mark.usefixtures("no_backoff")
+def test_every_unit_and_the_run_boundaries_are_recorded(tmp_path):
     calls = {"n": 0}
 
     def fn(req):
@@ -59,9 +49,8 @@ def test_every_unit_and_the_run_boundaries_are_recorded(tmp_path, no_sleep):
                               "out_tokens": 3, "latency_s": 0.5})
 
     out = tmp_path / "r.jsonl"
-    df = execute(units(grid({"m": ["x"]}), its(5)), FunctionBackend(
-        fn, identity={"m": "scripted"}), render, lambda u, r: {}, out,
-        workers=1, stream=io.StringIO())
+    df = run(list(units(grid({"m": ["x"]}), items(5))),
+             FunctionBackend(fn, identity={"m": "scripted"}), out)
     ev = read_events(out)
     assert list(ev["event"].iloc[[0, -1]]) == ["run_start", "run_end"]
     u = ev[ev["event"] == "unit"].set_index("unit_id")
@@ -78,33 +67,32 @@ def test_every_unit_and_the_run_boundaries_are_recorded(tmp_path, no_sleep):
     assert s["cost"] == pytest.approx((40 * 1 + 12 * 5) / 1e6)
 
 
-class Dies(Backend):
-    def __init__(self, alive):
-        self.alive, self.n = alive, 0
-
-    def identity(self):
-        return {"backend": "dies"}
-
-    def complete(self, req):
-        if self.n >= self.alive:
-            raise KeyboardInterrupt("killed")
-        self.n += 1
-        return Response(req.unit_id, text="ok", meta={"truncated": False})
-
-
 def test_a_killed_run_has_no_end_and_a_resume_is_a_second_run(tmp_path):
-    out, us = tmp_path / "r.jsonl", list(units(grid({"m": ["x"]}), its(6)))
+    out, us = tmp_path / "r.jsonl", list(units(grid({"m": ["x"]}), items(6)))
     with pytest.raises(KeyboardInterrupt):
-        execute(us, Dies(alive=2), render, lambda u, r: {}, out, workers=1,
-            stream=io.StringIO())
+        run(us, Dies(alive=2), out)
     s = summarize_events(out)
     assert s["killed_runs"] == 1 and s["runs"][0]["units_done"] == 2
-    execute(us, Dies(alive=100), render, lambda u, r: {}, out, workers=1,
-        stream=io.StringIO())
+    run(us, Dies(alive=100), out)
     s = summarize_events(out)
     assert [r["ended"] for r in s["runs"]] == [False, True]
     assert [r["units_done"] for r in s["runs"]] == [2, 4]
     assert s["runs"][1]["to_go"] == 4                 # resume skipped 2
+
+
+def test_run_boundaries_survive_a_crash_fragment_in_the_event_log(tmp_path):
+    """B24.  As above, but run 1's last event line is cut in half (a kill
+    inside a write).  By construction there were still 2 runs, the first
+    without a run_end."""
+    out, us = tmp_path / "r.jsonl", list(units(grid({"m": ["x"]}), items(6)))
+    with pytest.raises(KeyboardInterrupt):
+        run(us, Dies(alive=2), out)
+    ev = tmp_path / "r.jsonl.events.jsonl"
+    text = ev.read_text()
+    ev.write_text(text[:len(text) - len(text.splitlines()[-1]) // 2 - 1])
+    run(us, Dies(alive=100), out)
+    s = summarize_events(out)
+    assert [r["ended"] for r in s["runs"]] == [False, True]
 
 
 def test_errors_differing_only_in_numbers_and_ids_group_together():
@@ -146,18 +134,16 @@ def test_a_foreign_text_log_is_parsed_and_unmatched_lines_counted(tmp_path):
 def test_concurrent_writers_leave_no_torn_lines(tmp_path):
     out = tmp_path / "r.jsonl"
     be = FunctionBackend(lambda r: "ok", identity={"m": "fast"})
-    execute(units(grid({"m": ["x"]}), its(200)), be, render, lambda u, r: {}, out,
+    execute(units(grid({"m": ["x"]}), items(200)), be, render, lambda u, r: {}, out,
         workers=8, stream=io.StringIO())
     lines = events_path(out).read_text().splitlines()
     assert all(json.loads(x) for x in lines)
     ev = read_events(out)
     assert ev.attrs["unreadable"] == 0 and (ev["event"] == "unit").sum() == 200
-    assert threading.active_count() >= 1
 
 
 def test_events_can_be_turned_off(tmp_path):
     out = tmp_path / "r.jsonl"
-    execute(units(grid({"m": ["x"]}), its(2)), FunctionBackend(
-        lambda r: "ok", identity={"m": "x"}), render, lambda u, r: {}, out,
-        workers=1, events=False, stream=io.StringIO())
+    run(list(units(grid({"m": ["x"]}), items(2))),
+        FunctionBackend(lambda r: "ok", identity={"m": "x"}), out, events=False)
     assert not events_path(out).exists()

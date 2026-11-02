@@ -18,16 +18,11 @@ import io
 
 import pandas as pd
 import pytest
+from support.runner import Dies, items, run
 
 from evalcore import (
-    Backend,
     EchoBackend,
-    Item,
-    Request,
-    Response,
-    Unit,
     attrition,
-    execute,
     grid,
     manifest_path,
     read_manifest,
@@ -37,63 +32,14 @@ from evalcore import (
 )
 
 
-def items(n=8):
-    return [Item(f"q{i:03d}", {"q": f"question {i}"}) for i in range(n)]
-
-
-def render(u: Unit) -> Request:
-    return Request(u.id, [{"role": "user", "content": u.item.payload["q"]}],
-                   {"model": u.cell.get("model")})
-
-
-def score(u: Unit, r: Response) -> dict:
-    return {"n_chars": len(r.text)}
-
-
-class DyingBackend(Backend):
-    """Answers `alive` requests, then dies -- a kill, not an error row.
-
-    It raises KeyboardInterrupt rather than a plain exception on purpose:
-    `with_retries` turns any Exception into an error ROW, which is the design
-    commitment this package is built on, so the never-attempted category can
-    only ever be produced by the process itself going away.  Simulating the
-    kill with anything catchable would test the wrong path.
-
-    `fail_on` names item_ids that come back as error RESPONSES instead --
-    the other, already-visible category; the two must not be conflated.
-    """
-
-    def identity(self) -> dict:
-        return {"backend": "dying"}
-
-    name = "dying"
-
-    def __init__(self, alive: int, fail_on: set[str] = frozenset(),
-                 on_call=None):
-        self.alive, self.fail_on, self.on_call = alive, set(fail_on), on_call
-        self.calls = 0
-
-    def complete(self, req: Request) -> Response:
-        if self.on_call is not None:
-            self.on_call(self.calls)
-        if self.calls >= self.alive:
-            raise KeyboardInterrupt("process killed mid-sweep")
-        self.calls += 1
-        if req.messages[-1]["content"] in {f"question {int(t[1:])}"
-                                           for t in self.fail_on}:
-            return Response(req.unit_id, error="fatal: refused")
-        return Response(req.unit_id, text=req.messages[-1]["content"][::-1])
-
-
 def sweep(tmp_path, models=("m1", "m2", "m3"), n_items=8, alive=10,
           fail_on=frozenset(), on_call=None, **kw):
     """Run a cell-major sweep that dies after `alive` calls."""
     cells = grid({"model": list(models)}, tags={"arm": "base"})
     out = tmp_path / "runs.jsonl"
-    be = DyingBackend(alive, fail_on, on_call)
+    be = Dies(alive, fail_on, on_call)
     with pytest.raises(KeyboardInterrupt):
-        execute(units(cells, items(n_items)), be, render, score, out,
-            workers=1, log_every=1000, **kw)
+        run(list(units(cells, items(n_items))), be, out, **kw)
     return out, be, len(cells) * n_items
 
 
@@ -134,8 +80,7 @@ def test_a_sweep_that_died_before_its_first_call_is_still_accountable(
 def test_manifest_joins_to_the_frame_on_unit_id(tmp_path):
     cells = grid({"model": ["m1", "m2"]}, tags={"arm": "base"})
     out = tmp_path / "runs.jsonl"
-    df = execute(units(cells, items(6)), EchoBackend(), render, score, out,
-             workers=2, log_every=1000)
+    df = run(list(units(cells, items(6))), EchoBackend(), out)
     plan = read_manifest(manifest_path(out))
 
     assert len(plan) == len(df) == 12
@@ -182,7 +127,7 @@ def test_accounting_identity_holds_cell_by_cell(tmp_path):
     other -- so they get separate columns and must not sum into each other.
     """
     out, _be, planned = sweep(tmp_path, alive=14,
-                             fail_on={"q001", "q003", "q005"})
+                             fail_on={"q1", "q3", "q5"})
     df, plan = to_frame(out), read_manifest(manifest_path(out))
     full = attrition(df, ["model"], manifest=plan)
 
@@ -232,8 +177,7 @@ def test_stale_manifest_reports_unplanned_rows_not_negative_attrition(
     cells = grid({"model": ["m1", "m2"]})
     out = tmp_path / "runs.jsonl"
     all_units = list(units(cells, items(6)))
-    execute(all_units, EchoBackend(), render, score, out, workers=1,
-        log_every=1000)
+    run(all_units, EchoBackend(), out)
 
     stale = write_manifest(all_units[:4], tmp_path / "stale.manifest.jsonl")
     full = attrition(to_frame(out), ["model"], manifest=stale)
@@ -257,13 +201,11 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
     cells = grid({"model": ["m1", "m2"]})
     its, out = items(6), tmp_path / "runs.jsonl"
     with pytest.raises(KeyboardInterrupt):
-        execute(units(cells, its), DyingBackend(alive=4), render, score, out,
-            workers=1, log_every=1000)
+        run(list(units(cells, its)), Dies(alive=4), out)
 
     narrow = list(units(cells[:1], its))             # only the debugged arm
     log = io.StringIO()
-    df = execute(narrow, EchoBackend(), render, score, out, workers=1,
-             log_every=1000, stream=log)
+    df = run(narrow, EchoBackend(), out, stream=log)
     assert len(df) == 6                              # arm one, complete
     assert "6 planned units were never attempted" in log.getvalue()
 
@@ -281,8 +223,7 @@ def test_resume_reads_the_jsonl_not_the_manifest(tmp_path):
     sink; the manifest is rebuilt and no request is re-dispatched."""
     cells = grid({"model": ["m1"]})
     its, out = items(6), tmp_path / "runs.jsonl"
-    execute(units(cells, its), EchoBackend(), render, score, out, workers=1,
-        log_every=1000)
+    run(list(units(cells, its)), EchoBackend(), out)
     manifest_path(out).unlink()
 
     class Tripwire(EchoBackend):
@@ -295,17 +236,25 @@ def test_resume_reads_the_jsonl_not_the_manifest(tmp_path):
             raise KeyboardInterrupt("resume dispatched a finished unit")
 
     be = Tripwire()
-    df = execute(units(cells, its), be, render, score, out, workers=1,
-             log_every=1000)
+    df = run(list(units(cells, its)), be, out)
     assert be.calls == 0 and len(df) == 6
     assert len(read_manifest(manifest_path(out))) == 6
+
+
+def test_manifest_append_after_a_truncated_line_keeps_every_unit(tmp_path):
+    us = list(units(grid({"model": ["m"]}), items(6)))
+    mp = tmp_path / "plan.manifest.jsonl"
+    write_manifest(us[:3], mp)
+    keep = mp.read_text().splitlines()
+    mp.write_text("\n".join(keep[:2]) + "\n" + keep[2][:30])     # crash
+    write_manifest(us, mp)
+    assert set(read_manifest(mp)["unit_id"]) == {u.id for u in us}
 
 
 def test_manifest_can_be_disabled_and_run_is_unchanged(tmp_path):
     cells = grid({"model": ["m1"]})
     out = tmp_path / "runs.jsonl"
-    df = execute(units(cells, items(4)), EchoBackend(), render, score, out,
-             workers=1, log_every=1000, manifest=False)
+    df = run(list(units(cells, items(4))), EchoBackend(), out, manifest=False)
     assert len(df) == 4
     assert not manifest_path(out).exists()
 
@@ -315,8 +264,8 @@ def test_grouping_the_plan_by_a_scored_column_is_refused(tmp_path):
     it in.  Better a named error than a table with a silently dropped
     category."""
     out, _be, _planned = sweep(tmp_path, alive=9)
-    with pytest.raises(ValueError, match="n_chars"):
-        attrition(to_frame(out), ["n_chars"], manifest=manifest_path(out))
+    with pytest.raises(ValueError, match="answer"):
+        attrition(to_frame(out), ["answer"], manifest=manifest_path(out))
 
 
 def test_manifest_writes_are_append_only_and_concurrent_safe(tmp_path,

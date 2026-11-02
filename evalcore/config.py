@@ -3,12 +3,17 @@
     {"out": "runs/add_d2.jsonl",
      "task":    {"type": "arithmetic", "digits": 2, "n_items": 512},
      "backend": {"type": "hf", "model": "EleutherAI/pythia-70m"},
-     "grid":    {"model": ["pythia-70m"]},
+     "grid":    {},
+     "tags":    {"model": "pythia-70m"},
      "repeats": 1,
      "metric":  "em_tf",
-     "options": {"cache_dir": "cache", "max_cost": 5.0,
-                 "prices": {"in": 1.0, "out": 5.0}},
+     "options": {"cache_dir": "cache"},
      "stages":  {"calibrate": false}}
+
+The grid holds only what the backend reads: an HTTP backend reads "model"
+from the params, so there "grid": {"model": [...]} is a real axis; a local
+HF backend has its model loaded, so its name is a label, in "tags" (a column
+in every row, outside the cell id, so renaming it costs no re-run).
 
 Every component is a spec {"type": <name>, ...}, built by the registry of
 its kind (registry.py): the keys are the factory's arguments, checked
@@ -31,6 +36,8 @@ name with its keys.  The built-ins:
 Top-level keys:
 
   out, task, backend, grid       required
+  tags                           {key: value} labels on every cell: a
+                                 column in the rows, not in the ids
   repeats                        default 1
   score                          how rows are scored, if not the task's own
   metric | analyses              "metric": "correct" is shorthand for
@@ -93,15 +100,19 @@ from .tasks.search_qa import search_qa
 
 __all__ = ["ConfigError", "TaskSpec", "from_config"]
 
-_TOP = {"out", "task", "backend", "grid", "repeats", "score", "metric",
+_TOP = {"out", "task", "backend", "grid", "tags", "repeats", "score", "metric",
         "analyses", "options", "stages", "agent", "search", "plugins"}
 
 
-def _check(section: Mapping[str, Any], allowed: set[str], where: str) -> None:
+def _check(section: Mapping[str, Any], allowed: set[str], where: str,
+           required: Sequence[str] = ()) -> None:
     unknown = set(section) - allowed
     if unknown:
         raise ConfigError(f"{where}: unknown key(s) {sorted(unknown)}; "
                           f"allowed: {sorted(allowed)}")
+    for key in required:
+        if key not in section:
+            raise ConfigError(f"{where}: '{key}' is required")
 
 
 @dataclass
@@ -162,26 +173,25 @@ def _http(flavour: str, default_params: Mapping[str, Any] | None = None,
                        default_params=default_params)
 
 
-def _hf_load(spec: Mapping[str, Any], head: str) -> tuple[Any, Any]:
+def _hf_load(head: str, model: str, revision: str | None, dtype: str,
+             device: str | None) -> tuple[Any, Any]:
     """A transformers model and tokenizer at `revision`, on `device`."""
     import torch
     import transformers as tf
     cls = {"causal": tf.AutoModelForCausalLM, "encoder": tf.AutoModel,
            "pair": tf.AutoModelForSequenceClassification}[head]
-    rev = spec.get("revision")
-    model = cls.from_pretrained(spec["model"], revision=rev,
-                                dtype=getattr(torch, spec["dtype"])).eval()
-    if spec.get("device"):
-        model = model.to(spec["device"])
-    return model, tf.AutoTokenizer.from_pretrained(spec["model"], revision=rev)
+    m = cls.from_pretrained(model, revision=revision,
+                            dtype=getattr(torch, dtype)).eval()
+    if device:
+        m = m.to(device)
+    return m, tf.AutoTokenizer.from_pretrained(model, revision=revision)
 
 
 @register("backend", "hf")
 def _hf(model: str, revision: str | None = None, dtype: str = "float32",
         device: str | None = None, generate: bool = False,
         default_params: Mapping[str, Any] | None = None) -> Backend:
-    m, tok = _hf_load({"model": model, "revision": revision, "dtype": dtype,
-                       "device": device}, "causal")
+    m, tok = _hf_load("causal", model, revision, dtype, device)
     return HFBackend(m, tok, device=device, generate=generate,
                      default_params=default_params)
 
@@ -270,8 +280,7 @@ def _hf_embedder(model: str, pooling: str, revision: str | None = None,
                  dtype: str = "float32", device: str | None = None,
                  prefixes: Mapping[str, str] | None = None,
                  max_length: int = 512) -> Embedder:
-    m, tok = _hf_load({"model": model, "revision": revision, "dtype": dtype,
-                       "device": device}, "encoder")
+    m, tok = _hf_load("encoder", model, revision, dtype, device)
     return HFEmbedder(m, tok, pooling=pooling, prefixes=prefixes,
                       max_length=max_length, device=device)
 
@@ -284,8 +293,7 @@ register("index", "faiss")(FaissIndex)
 def _hf_cross_encoder(model: str, revision: str | None = None,
                       dtype: str = "float32", device: str | None = None,
                       max_length: int = 512) -> PairScorer:
-    m, tok = _hf_load({"model": model, "revision": revision, "dtype": dtype,
-                       "device": device}, "pair")
+    m, tok = _hf_load("pair", model, revision, dtype, device)
     return HFCrossEncoder(m, tok, max_length=max_length, device=device)
 
 
@@ -366,13 +374,11 @@ def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
 
 def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
     """An Experiment from a config file or dict (see the module docstring)."""
-    base = Path(source).parent if isinstance(source, (str, Path)) else None
-    cfg = (json.loads(Path(source).read_text())
-           if isinstance(source, (str, Path)) else dict(source))
-    _check(cfg, _TOP, "config")
-    for key in ("out", "task", "backend", "grid"):
-        if key not in cfg:
-            raise ConfigError(f"config: '{key}' is required")
+    if isinstance(source, (str, Path)):
+        base, cfg = Path(source).parent, json.loads(Path(source).read_text())
+    else:
+        base, cfg = None, dict(source)
+    _check(cfg, _TOP, "config", required=("out", "task", "backend", "grid"))
     _plugins(cfg.get("plugins", []), base)
 
     made = build("task", cfg["task"], "task")
@@ -392,10 +398,7 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
                           "retriever")
     if "search" in cfg:
         search = dict(cfg["search"])
-        _check(search, {"retriever", "k"}, "search")
-        for key in ("retriever", "k"):
-            if key not in search:
-                raise ConfigError(f"search: '{key}' is required")
+        _check(search, {"retriever", "k"}, "search", required=("retriever", "k"))
         if ts.docs is None or not tools:
             raise ConfigError("search: this task has no corpus to search")
         tools = [CorpusSearch(ts.docs, build("retriever", search["retriever"],
@@ -415,7 +418,10 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
                 if "analyses" in cfg else None)
     opts = dict(cfg.get("options", {}))
     _check(opts, set(RunOptions.__dataclass_fields__), "options")
-    return Experiment(task, backend, grid(cfg["grid"]), cfg["out"],
+    tags = cfg.get("tags", {})
+    if not isinstance(tags, Mapping):
+        raise ConfigError(f"tags: expected {{key: value}}, got {tags!r}")
+    return Experiment(task, backend, grid(cfg["grid"], tags=tags), cfg["out"],
                       repeats=cfg.get("repeats", 1), metric=cfg.get("metric"),
                       analyses=analyses, options=RunOptions(**opts),
                       **_stages(cfg.get("stages", {})))

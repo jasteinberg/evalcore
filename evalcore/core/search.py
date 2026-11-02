@@ -58,7 +58,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from .backends.base import Backend, Request, Response
-from .embed import Embedder, EmbeddingCache
+from .embed import Embedder, EmbeddingCache, _checkpoint, _on_device
 from .spec import digest
 from .tools import Tool, ToolInputError
 
@@ -166,6 +166,11 @@ class Index(ABC):
                ) -> tuple[np.ndarray, np.ndarray]:
         """(n, k) row indices and scores; -1 where fewer than k exist."""
 
+    @staticmethod
+    def _check_metric(metric: str) -> None:
+        if metric not in ("cosine", "dot"):
+            raise ValueError("metric must be cosine or dot")
+
     def _prep(self, x: np.ndarray) -> np.ndarray:
         x = np.ascontiguousarray(x, np.float32)
         if self.metric == "cosine":
@@ -177,8 +182,7 @@ class ExactIndex(Index):
     """Brute force: every query against every vector, in query chunks."""
 
     def __init__(self, metric: str = "cosine", chunk: int = 1024) -> None:
-        if metric not in ("cosine", "dot"):
-            raise ValueError("metric must be cosine or dot")
+        self._check_metric(metric)
         self.metric, self.chunk = metric, chunk
         self.V = np.zeros((0, 0), np.float32)
 
@@ -213,12 +217,11 @@ class FaissIndex(Index):
                  nlist: int | None = None, nprobe: int = 16) -> None:
         if kind not in ("hnsw", "ivf"):
             raise ValueError("kind must be hnsw or ivf")
-        if metric not in ("cosine", "dot"):
-            raise ValueError("metric must be cosine or dot")
+        self._check_metric(metric)
         self.kind, self.metric = kind, metric
-        self.params: dict[str, Any] = ({"m": m, "ef_construction": ef_construction,
-                        "ef_search": ef_search} if kind == "hnsw"
-                       else {"nlist": nlist, "nprobe": nprobe})
+        self.params: dict[str, Any] = (
+            {"m": m, "ef_construction": ef_construction, "ef_search": ef_search}
+            if kind == "hnsw" else {"nlist": nlist, "nprobe": nprobe})
         self.index: Any = None
 
     def identity(self) -> dict[str, Any]:
@@ -380,22 +383,18 @@ class HFCrossEncoder:
         self.max_length, self.batch_size, self.device = max_length, batch_size, device
 
     def identity(self) -> dict[str, Any]:
-        cfg = getattr(self.model, "config", None)
-        return {"scorer": "hf-cross-encoder",
-                "model": getattr(self.model, "name_or_path", None),
-                "commit": getattr(cfg, "_commit_hash", None),
+        return {"scorer": "hf-cross-encoder", **_checkpoint(self.model),
                 "max_length": self.max_length}
 
     def score(self, query: str, docs: Sequence[str]) -> np.ndarray:
         import torch
-        dev = self.device or next(self.model.parameters()).device
         out = []
         for a in range(0, len(docs), self.batch_size):
             part = list(docs[a:a + self.batch_size])
-            enc = self.tok([query] * len(part), part, padding=True,
-                           truncation="only_second", max_length=self.max_length,
-                           return_tensors="pt")
-            enc = {k: v.to(dev) for k, v in enc.items()}
+            enc = _on_device(self.model, self.device, self.tok(
+                [query] * len(part), part, padding=True,
+                truncation="only_second", max_length=self.max_length,
+                return_tensors="pt"))
             with torch.no_grad():
                 logits = self.model(**enc).logits
             out.append(logits.reshape(len(part)).float().cpu().numpy())

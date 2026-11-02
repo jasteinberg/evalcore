@@ -8,7 +8,17 @@ import io
 import numpy as np
 import pytest
 
-from evalcore import HFBackend, Item, Probe, Request, execute, grid, load_arrays, units
+from evalcore import (
+    FunctionProbe,
+    HFBackend,
+    Item,
+    Probe,
+    Request,
+    execute,
+    grid,
+    load_arrays,
+    units,
+)
 
 torch = pytest.importorskip("torch")
 
@@ -124,3 +134,11 @@ def test_a_module_running_more_often_than_declared_is_an_error():
     assert not b.model.mix._forward_hooks          # removed anyway
 
 
+def test_a_probe_returning_the_wrong_count_fails_by_name():
+    def short(out, enc, reqs):
+        return [{}]                              # one dict for two requests
+
+    b = be(FunctionProbe(short))
+    with pytest.raises(ValueError, match=r"FunctionProbe\(short\) returned 1 "
+                       r"dicts for 2"):
+        b.complete_batch([choice(0, PROMPTS[0]), choice(1, PROMPTS[1])])

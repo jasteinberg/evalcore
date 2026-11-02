@@ -1,0 +1,278 @@
+[
+ [
+  "+d2s4-3-00000",
+  {
+   "gold": "102",
+   "messages": [
+    {
+     "content": "40 + 85 = 125\n79 + 26 = 105\n57 + 87 = 144\n70 + 90 = 160\n84 + 18 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 84,
+    "answer": 102,
+    "b": 18,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 102"
+  }
+ ],
+ [
+  "+d2s4-3-00001",
+  {
+   "gold": "159",
+   "messages": [
+    {
+     "content": "87 + 11 = 98\n70 + 43 = 113\n80 + 39 = 119\n34 + 70 = 104\n79 + 80 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 79,
+    "answer": 159,
+    "b": 80,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 159"
+  }
+ ],
+ [
+  "+d2s4-3-00002",
+  {
+   "gold": "70",
+   "messages": [
+    {
+     "content": "70 + 60 = 130\n91 + 29 = 120\n39 + 91 = 130\n29 + 76 = 105\n59 + 11 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 59,
+    "answer": 70,
+    "b": 11,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 70"
+  }
+ ],
+ [
+  "+d2s4-3-00003",
+  {
+   "gold": "156",
+   "messages": [
+    {
+     "content": "95 + 18 = 113\n30 + 85 = 115\n15 + 48 = 63\n13 + 44 = 57\n70 + 86 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 70,
+    "answer": 156,
+    "b": 86,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 156"
+  }
+ ],
+ [
+  "+d2s4-3-00004",
+  {
+   "gold": "41",
+   "messages": [
+    {
+     "content": "59 + 64 = 123\n60 + 83 = 143\n66 + 27 = 93\n56 + 22 = 78\n14 + 27 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 14,
+    "answer": 41,
+    "b": 27,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 41"
+  }
+ ],
+ [
+  "+d2s4-3-00005",
+  {
+   "gold": "133",
+   "messages": [
+    {
+     "content": "73 + 37 = 110\n43 + 96 = 139\n65 + 90 = 155\n48 + 63 = 111\n74 + 59 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 74,
+    "answer": 133,
+    "b": 59,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 133"
+  }
+ ],
+ [
+  "+d2s4-3-00006",
+  {
+   "gold": "110",
+   "messages": [
+    {
+     "content": "83 + 54 = 137\n78 + 84 = 162\n62 + 84 = 146\n39 + 53 = 92\n97 + 13 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 97,
+    "answer": 110,
+    "b": 13,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 110"
+  }
+ ],
+ [
+  "+d2s4-3-00007",
+  {
+   "gold": "165",
+   "messages": [
+    {
+     "content": "45 + 87 = 132\n95 + 99 = 194\n30 + 99 = 129\n51 + 79 = 130\n83 + 82 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 83,
+    "answer": 165,
+    "b": 82,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 165"
+  }
+ ],
+ [
+  "+d2s4-3-00008",
+  {
+   "gold": "89",
+   "messages": [
+    {
+     "content": "23 + 93 = 116\n37 + 91 = 128\n83 + 44 = 127\n46 + 25 = 71\n18 + 71 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 18,
+    "answer": 89,
+    "b": 71,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 89"
+  }
+ ],
+ [
+  "+d2s4-3-00009",
+  {
+   "gold": "111",
+   "messages": [
+    {
+     "content": "91 + 71 = 162\n21 + 54 = 75\n18 + 62 = 80\n29 + 12 = 41\n47 + 64 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 47,
+    "answer": 111,
+    "b": 64,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 111"
+  }
+ ],
+ [
+  "+d2s4-3-00010",
+  {
+   "gold": "132",
+   "messages": [
+    {
+     "content": "63 + 25 = 88\n15 + 87 = 102\n88 + 15 = 103\n58 + 85 = 143\n52 + 80 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 52,
+    "answer": 132,
+    "b": 80,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 132"
+  }
+ ],
+ [
+  "+d2s4-3-00011",
+  {
+   "gold": "164",
+   "messages": [
+    {
+     "content": "45 + 74 = 119\n40 + 14 = 54\n49 + 10 = 59\n19 + 23 = 42\n86 + 78 =",
+     "role": "user"
+    }
+   ],
+   "meta": {
+    "a": 86,
+    "answer": 164,
+    "b": 78,
+    "digits": 2,
+    "leak": false,
+    "n_shots": 4,
+    "op": "+",
+    "spaced": false
+   },
+   "target": " 164"
+  }
+ ]
+]

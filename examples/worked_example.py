@@ -4,6 +4,11 @@ A two-arm multiple-choice eval with paraphrase augmentation, run against a
 scripted stand-in model so the numbers are reproducible and cost nothing.
 Prints one concrete object at each stage of the pipeline.
 
+    python examples/worked_example.py OUT_DIR
+
+The sink is written to OUT_DIR/rows.jsonl.  A rerun into the same directory
+resumes from that sink, so use a fresh directory after editing the example.
+
 Drafted with the assistance of Claude (Anthropic).
 """
 import json
@@ -112,7 +117,15 @@ def rule(t):
 
 
 if __name__ == "__main__":
+    import argparse
+    from pathlib import Path
+
     from evalcore.core.backends import EchoBackend
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("out_dir", type=Path,
+                    help="directory for the sink rows.jsonl (a rerun resumes it)")
+    args = ap.parse_args()
 
     items = build_items()
     cells = grid({"model": ["model-a", "model-b"], "template": ["plain", "cot"],
@@ -153,7 +166,7 @@ if __name__ == "__main__":
 
     rule("6. RUN  -> tidy frame (one row per unit)")
     df = execute(all_units, EchoBackend(fn=ScriptedModel()), render, score,
-             out="/tmp/evalcore_demo/rows.jsonl", workers=4, log_every=10_000)
+                 out=args.out_dir / "rows.jsonl", workers=4, log_every=10_000)
     cols = ["cell_id", "model", "template", "item_id", "cluster", "group",
             "repeat", "status", "pred", "correct", "resp_chars"]
     print(f"\nframe shape = {df.shape}")

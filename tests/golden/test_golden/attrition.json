@@ -1,0 +1,49 @@
+{
+ "columns": [
+  "model",
+  "n_planned",
+  "n_rows",
+  "n_completed",
+  "n_err",
+  "n_tool_error",
+  "n_truncated",
+  "n_unparsed",
+  "n_missing",
+  "n_unplanned",
+  "err_rate",
+  "missing_rate",
+  "attrition_rate"
+ ],
+ "rows": [
+  [
+   "strong",
+   24,
+   24,
+   24,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  [
+   "weak",
+   24,
+   24,
+   24,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0.0,
+   0.0,
+   0.0
+  ]
+ ]
+}

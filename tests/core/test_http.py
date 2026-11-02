@@ -1,7 +1,10 @@
-"""Provider tool-calling formats.  Expected shapes follow each provider's
-reference as read on 2 Oct 2026 (Anthropic Messages tool use; OpenAI Chat
-Completions types; Gemini generateContent), and the end-to-end tests check
-what actually goes over the wire on the second turn."""
+"""HTTPBackend: each provider's request and reply shapes (tool calls
+included), what goes over the wire, errors, retries and rate limits.
+
+Expected shapes follow each provider's reference as read on 2 Oct 2026
+(Anthropic Messages tool use; OpenAI Chat Completions types; Gemini
+generateContent).  A scripted server (httpx.MockTransport) answers every
+call, and the end-to-end tests check what actually goes over the wire."""
 
 from __future__ import annotations
 
@@ -9,7 +12,8 @@ import json
 
 import pytest
 
-from evalcore import AgentBackend, CorpusSearch, HTTPBackend, Request
+from evalcore import AgentBackend, CorpusSearch, Fatal, Request, with_retries
+from evalcore.core.backends import base
 from evalcore.core.backends.http import (
     _anthropic_adapter,
     _anthropic_parse,
@@ -20,6 +24,84 @@ from evalcore.core.backends.http import (
 )
 
 httpx = pytest.importorskip("httpx")
+
+from support.http import OK_REPLY, mock_http  # noqa: E402
+
+Q = [{"role": "user", "content": "q"}]
+
+
+# --- request shapes -------------------------------------------------------------
+
+def test_anthropic_adapter_needs_an_explicit_budget():
+    msgs = [{"role": "user", "content": "hi"}]
+    with pytest.raises(Fatal):
+        _anthropic_adapter("m", msgs, {})
+    _, body = _anthropic_adapter("m", msgs, {"max_tokens": 32})
+    assert body["max_tokens"] == 32
+
+
+def test_openai_budget_is_sent_as_max_completion_tokens():
+    _, body = _openai_adapter("m", Q, {"max_tokens": 64})
+    assert body["max_completion_tokens"] == 64 and "max_tokens" not in body
+
+
+def _sent_or_refused(flavour, params):
+    """("fatal", message) if the backend refuses `params`, else ("body",
+    the JSON body that went over the wire)."""
+    be, seen = mock_http(flavour, lambda req: httpx.Response(
+        200, json=OK_REPLY[flavour]))
+    try:
+        be.complete(Request("u", Q, params))
+    except Fatal as exc:
+        return "fatal", str(exc)
+    return "body", json.loads(seen[0].content)
+
+
+@pytest.mark.parametrize("key", ["presence_penalty", "foo"])
+@pytest.mark.parametrize("flavour", ["anthropic", "openai", "gemini"])
+def test_a2_an_unforwarded_param_is_refused_or_sent(flavour, key):
+    """A2. Invariance: a param in the request moves the cell id and the
+    cache key, so 0.0 and 1.5 must either reach the wire as two different
+    bodies or be refused with an error that names the key."""
+    lo = _sent_or_refused(flavour, {key: 0.0})
+    hi = _sent_or_refused(flavour, {key: 1.5})
+    if lo[0] == "fatal" or hi[0] == "fatal":
+        assert lo[0] == hi[0] == "fatal" and key in lo[1] and key in hi[1]
+    else:
+        assert lo[1] != hi[1]
+
+
+# --- reply parsing --------------------------------------------------------------
+
+@pytest.mark.parametrize("parse,js,want", [
+    (_anthropic_parse, {"content": [], "stop_reason": "max_tokens"}, True),
+    (_anthropic_parse, {"content": [], "stop_reason": "end_turn"}, False),
+    (_openai_parse, {"choices": [{"message": {}, "finish_reason": "length"}]}, True),
+    (_openai_parse, {"choices": [{"message": {}, "finish_reason": "stop"}]}, False),
+    (_gemini_parse, {"candidates": [{"finishReason": "MAX_TOKENS"}]}, True),
+    (_gemini_parse, {"candidates": [{"finishReason": "STOP"}]}, False),
+])
+def test_truncation_is_normalised_across_providers(parse, js, want):
+    assert parse(js)[1]["truncated"] is want
+
+
+@pytest.mark.parametrize("feedback,phrase", [
+    ({"promptFeedback": {"blockReason": "SAFETY"}}, "SAFETY"),
+    ({}, "no candidates")])
+def test_a18_a_gemini_reply_without_candidates_is_not_an_ok_empty_row(
+        feedback, phrase):
+    """A18. Gemini's documented reply to a blocked prompt carries
+    promptFeedback.blockReason and no candidates; with no blockReason the
+    reply is unexplained.  Expected either way: an error (naming the block
+    reason when there is one), never ok with text ""."""
+    be, _ = mock_http("gemini", lambda req: httpx.Response(200, json={
+        **feedback, "usageMetadata": {"promptTokenCount": 7}}))
+    r = with_retries(be.complete, Request("u", Q, {}), attempts=1)
+    assert not r.ok
+    assert phrase in r.error
+
+
+# --- tool calls -----------------------------------------------------------------
 
 SPEC = {"name": "search", "description": "Search the docs.",
         "parameters": {"type": "object",
@@ -171,12 +253,7 @@ def scripted_server(flavour):
 @pytest.mark.parametrize("flavour", ["anthropic", "openai", "gemini"])
 def test_a_two_turn_episode_over_the_wire(flavour):
     handler, seen = scripted_server(flavour)
-    http = HTTPBackend(flavour, api_key="k",
-                       default_params={"model": "m", "max_tokens": 64})
-    real = http.client
-    http.client = httpx.Client(base_url=real.base_url, headers=real.headers,
-                               transport=httpx.MockTransport(handler))
-    real.close()
+    http, _ = mock_http(flavour, handler, {"model": "m", "max_tokens": 64})
     agent = AgentBackend(http, [CorpusSearch(DOCS).tool])
     r = agent.complete(Request("u", [{"role": "user", "content": "Where?"}], {}))
     assert r.ok and r.text == "In the Askern hills."
@@ -234,29 +311,14 @@ def signature_enforcing_server():
 
 def test_gemini_thought_signatures_are_echoed_back():
     handler, _seen = signature_enforcing_server()
-    http = HTTPBackend("gemini", api_key="k",
-                       default_params={"model": "m", "max_tokens": 64})
-    real = http.client
-    http.client = httpx.Client(base_url=real.base_url, headers=real.headers,
-                               transport=httpx.MockTransport(handler))
-    real.close()
+    http, _ = mock_http("gemini", handler, {"model": "m", "max_tokens": 64})
     r = AgentBackend(http, [CorpusSearch(DOCS).tool]).complete(
         Request("u", [{"role": "user", "content": "Where?"}], {}))
     assert r.ok, r.error
     assert r.text == "In the Askern hills."
 
 
-# --- found in the first live run (2 Oct) ---------------------------------------
-
-def _backend_with(handler):
-    http = HTTPBackend("gemini", api_key="k",
-                       default_params={"model": "m", "max_tokens": 8})
-    real = http.client
-    http.client = httpx.Client(base_url=real.base_url, headers=real.headers,
-                               transport=httpx.MockTransport(handler))
-    real.close()
-    return http
-
+# --- errors, retries and rate limits (first live run, 2 Oct) -----------------
 
 def test_an_error_keeps_the_providers_message_and_details():
     long_msg = "You exceeded your current quota, please check your plan. " * 5
@@ -268,17 +330,14 @@ def test_an_error_keeps_the_providers_message_and_details():
             "code": 400, "status": "INVALID_ARGUMENT", "message": long_msg,
             "details": [detail]}})
 
-    from evalcore import Fatal
     with pytest.raises(Fatal) as exc:
-        _backend_with(handler).complete(Request("u", [{"role": "user",
-                                                       "content": "q"}], {}))
+        mock_http("gemini", handler)[0].complete(Request("u", Q, {}))
     assert long_msg.strip() in str(exc.value)
     assert "generate_requests_per_minute" in str(exc.value)
 
 
 @pytest.mark.parametrize("how", ["header", "retryinfo"])
 def test_a_rate_limit_waits_as_long_as_the_server_asks(monkeypatch, how):
-    from evalcore.core.backends import base
     slept = []
     monkeypatch.setattr(base.time, "sleep", slept.append)
     calls = []
@@ -295,16 +354,13 @@ def test_a_rate_limit_waits_as_long_as_the_server_asks(monkeypatch, how):
         return httpx.Response(200, json={"candidates": [{"content": {
             "parts": [{"text": "ok"}]}, "finishReason": "STOP"}]})
 
-    from evalcore import with_retries
-    r = with_retries(_backend_with(handler).complete,
-                     Request("u", [{"role": "user", "content": "q"}], {}))
+    r = with_retries(mock_http("gemini", handler)[0].complete,
+                     Request("u", Q, {}))
     assert r.ok and r.text == "ok"
     assert slept and slept[0] >= 37        # at least what the server asked
 
 
 def test_a_server_asking_for_more_than_the_cap_fails_fast(monkeypatch):
-    from evalcore import with_retries
-    from evalcore.core.backends import base
     slept = []
     monkeypatch.setattr(base.time, "sleep", slept.append)
 
@@ -312,12 +368,27 @@ def test_a_server_asking_for_more_than_the_cap_fails_fast(monkeypatch):
         return httpx.Response(429, headers={"retry-after": "3600"},
                               json={"error": {"code": 429, "message": "daily"}})
 
-    r = with_retries(_backend_with(handler).complete,
-                     Request("u", [{"role": "user", "content": "q"}], {}))
+    r = with_retries(mock_http("gemini", handler)[0].complete,
+                     Request("u", Q, {}))
     assert not r.ok and "asks to wait 3600s" in r.error and slept == []
 
 
-def test_openai_budget_is_sent_as_max_completion_tokens():
-    _, body = _openai_adapter("m", [{"role": "user", "content": "q"}],
-                              {"max_tokens": 64})
-    assert body["max_completion_tokens"] == 64 and "max_tokens" not in body
+@pytest.mark.parametrize("first", [408, 503, "connect"])
+def test_a37_a_transient_failure_then_200_succeeds_on_the_second_call(
+        monkeypatch, first):
+    """A37. Server script: one transient failure (a 408 or 503 reply, or a
+    ConnectError from the transport), then 200.  Expected: ok with the
+    200's text after exactly 2 requests."""
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+
+    def handler(req):
+        if len(seen) == 1:
+            if first == "connect":
+                raise httpx.ConnectError("connection refused", request=req)
+            return httpx.Response(first, json={"error": {"message": "busy"}})
+        return httpx.Response(200, json=OK_REPLY["gemini"])
+
+    be, seen = mock_http("gemini", handler)
+    r = with_retries(be.complete, Request("u", Q, {}), attempts=5)
+    assert r.ok, r.error
+    assert r.text == "hi" and len(seen) == 2

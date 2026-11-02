@@ -102,21 +102,21 @@ class AgentBackend(Backend):
                                      tools=specs), self.attempts)
             if not r.ok:
                 return done(error=f"model: {r.error}", truncated=False)
-            calls = list((r.meta or {}).get("tool_calls") or [])
+            rm = r.meta or {}
+            calls = list(rm.get("tool_calls") or [])
             turn: dict[str, Any] = {"text": r.text, "tool_calls": calls,
                                     "results": [],
-                                    "in_tokens": (r.meta or {}).get("in_tokens"),
-                                    "out_tokens": (r.meta or {}).get("out_tokens")}
+                                    "in_tokens": rm.get("in_tokens"),
+                                    "out_tokens": rm.get("out_tokens")}
             trajectory.append(turn)
             if not calls:
-                return done(text=r.text,
-                            truncated=bool((r.meta or {}).get("truncated")),
-                            **{k: v for k, v in (r.meta or {}).items()
+                return done(text=r.text, truncated=bool(rm.get("truncated")),
+                            **{k: v for k, v in rm.items()
                                if k in ("stop_reason", "model")})
             asst = {"role": "assistant", "content": r.text,
                     "tool_calls": calls}
-            if (r.meta or {}).get("raw_turn"):
-                asst["raw_turn"] = r.meta["raw_turn"]   # echoed verbatim
+            if rm.get("raw_turn"):
+                asst["raw_turn"] = rm["raw_turn"]       # echoed verbatim
             msgs.append(asst)
             for c in calls:
                 n_calls += 1

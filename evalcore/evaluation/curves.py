@@ -121,11 +121,17 @@ class AxisData:
     n_dropped: int = 0
 
 
-def _align(d: pd.DataFrame, x: str, item: str, cluster: str
+def _align(d: pd.DataFrame, x: str, item: str, cluster: str,
+           planned: pd.Series
            ) -> tuple[np.ndarray, dict, np.ndarray, np.ndarray, int]:
     """Validate a frame for a paired axis analysis and align it: the axis
     values, rows per x indexed by item, the items present at EVERY x, their
     cluster codes, and how many items were dropped for missing a point.
+
+    `d` holds the usable rows; `planned` is the item column of the frame
+    BEFORE rows were filtered out, so an item with no usable row anywhere
+    (an error at every x) counts as dropped just like one missing a single
+    point.  Counting only the items left in `d` would make it vanish.
 
     Refused, never guessed: a non-numeric axis (strings sort as text), a
     missing cluster label, two rows for one (item, x)."""
@@ -148,7 +154,8 @@ def _align(d: pd.DataFrame, x: str, item: str, cluster: str
         raise ValueError(f"need >= 2 distinct values of {x!r}, got {len(xs)}")
     per_x = {v: g.set_index(item) for v, g in d.groupby(x)}
     common = set.intersection(*(set(g.index) for g in per_x.values()))
-    every = set().union(*(set(g.index) for g in per_x.values()))
+    every = set().union(*(set(g.index) for g in per_x.values()),
+                        set(planned))
     items = np.array(sorted(common))
     if len(items) < 2:
         raise ValueError("fewer than 2 items are scored at every axis point")
@@ -163,6 +170,10 @@ def _align(d: pd.DataFrame, x: str, item: str, cluster: str
     return xs, per_x, items, pd.factorize(cl.to_numpy())[0], n_dropped
 
 
+def _ok_rows(df: pd.DataFrame) -> pd.DataFrame:
+    return df[df["status"] == "ok"] if "status" in df.columns else df
+
+
 def axis_data(df: pd.DataFrame, x: str, item: str = "item_id",
               cluster: str = "cluster", ok: str = OK,
               n_target: str = NT) -> AxisData:
@@ -172,11 +183,9 @@ def axis_data(df: pd.DataFrame, x: str, item: str = "item_id",
     throughout, and an item missing at one point (an error row, a killed
     run) would otherwise make that point's mean a different population.
     The number dropped is recorded and warned about, never silent."""
-    d = df
-    if "status" in d.columns:
-        d = d[d["status"] == "ok"]
+    d = _ok_rows(df)
     d = d[d[ok].map(lambda v: isinstance(v, (list, tuple, np.ndarray)))]
-    xs, per_x, items, codes, n_dropped = _align(d, x, item, cluster)
+    xs, per_x, items, codes, n_dropped = _align(d, x, item, cluster, df[item])
     oks, valids, nts = [], [], []
     for v in xs:
         g = per_x[v].loc[items]
@@ -295,16 +304,24 @@ def _curves(w: np.ndarray, data: AxisData,
     for a, c in (("A_obs", "chi_obs"), ("A_pred", "chi_pred"),
                  ("A_pred_lc", "chi_pred_lc")):
         out[c] = susceptibility(data.x, out[a], log=log_x)
-    i = np.argmax(out["chi_obs"], 1)
+    i, peak = _peak(data.x, out["chi_obs"])
     b = np.arange(len(w))
-    out["peak_x"] = data.x[i]
-    # chi at an end point is a one-sided difference -- for a single jump,
-    # twice the centred value -- so a peak there is a grid artefact
-    out["peak_at_edge"] = ((i == 0) | (i == len(data.x) - 1)).astype(float)
-    out["peak_chi"] = out["chi_obs"][b, i]
+    out.update(peak)
     out["peak_chi_gap"] = out["chi_obs"][b, i] - out["chi_pred"][b, i]
     out["peak_chi_gap_lc"] = out["chi_obs"][b, i] - out["chi_pred_lc"][b, i]
     return out
+
+
+def _peak(xs: np.ndarray, chi: np.ndarray
+          ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Per replicate row of `chi` (B, n_x): the argmax index, and peak_x,
+    peak_at_edge, peak_chi."""
+    i = np.argmax(chi, 1)
+    # chi at an end point is a one-sided difference -- for a single jump,
+    # twice the centred value -- so a peak there is a grid artefact
+    return i, {"peak_x": xs[i],
+               "peak_at_edge": ((i == 0) | (i == len(xs) - 1)).astype(float),
+               "peak_chi": chi[np.arange(len(chi)), i]}
 
 
 @dataclass
@@ -376,25 +393,59 @@ def axis_curves(df: pd.DataFrame, x: str, item: str = "item_id",
     0, such as a checkpoint step, needs the linear form).  `peak_at_edge`
     is 1 when the chi peak sits on an end of the grid, where chi is a
     one-sided difference; its interval says how often that happens across
-    replicates."""
+    replicates.
+
+    A quantity can be undefined in a replicate: phi_l, the per-position
+    rate among items of length l, is 0/0 in any replicate that draws no
+    such item.  With n_l of k clusters holding length-l items, that
+    happens with probability
+
+        P(no draw) = (1 - n_l/k)^k  ->  exp(-n_l)   as k grows,
+
+    0.37 for a single such item whatever k.  The interval is then taken
+    over the replicates where it is defined, and describes only them, so
+    the share left out is reported as `<name>_censored`: a table column
+    (per x) or a peak row, present whenever some replicate is NaN, as
+    value_curves does for a crossing."""
     data = axis_data(df, x, item, cluster, ok, n_target)
     _require_positive(data.x, x, log_x)
     point, reps = axis_bootstrap(
         data, functools.partial(_curves, log_x=log_x), n_boot, seed)
-    q = [alpha / 2, 1 - alpha / 2]
-    table = pd.DataFrame({x: data.x})
-    peak_rows = []
-    for key in point:
-        val = np.asarray(point[key], float)
-        lo, hi = np.nanquantile(reps[key], q, axis=0)
-        if val.ndim == 0:
-            peak_rows.append({"quantity": key, "point": float(val),
-                              "lo": float(lo), "hi": float(hi)})
-        else:
-            table[key], table[f"{key}_lo"], table[f"{key}_hi"] = val, lo, hi
-    return _with_caveats(AxisCurves(table, pd.DataFrame(peak_rows), reps,
-                                    len(data.items), data.n_dropped),
+    table, peak = _tabulate(x, data.x, point, reps, alpha)
+    return _with_caveats(AxisCurves(table, peak, reps, len(data.items),
+                                    data.n_dropped),
                          int(data.cluster.max()) + 1)
+
+
+def _tabulate(name: str, xs: np.ndarray, point: Mapping[str, Any],
+              reps: Mapping[str, np.ndarray], alpha: float
+              ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Percentile intervals of the replicates: a quantity with one value per
+    x becomes table columns, a scalar a peak row.  Where a quantity is
+    undefined (NaN) in some replicates, the interval is over the rest and
+    the share left out is reported as `<name>_censored`: a column, or a
+    row, which a crossing always gets."""
+    q = [alpha / 2, 1 - alpha / 2]
+    table = pd.DataFrame({name: xs})
+    rows = []
+    for key, v in point.items():
+        val, r = np.asarray(v, float), np.asarray(reps[key], float)
+        cens = np.mean(~np.isfinite(r), axis=0)
+        if val.ndim == 0:
+            fin = r[np.isfinite(r)]
+            lo, hi = np.quantile(fin, q) if fin.size else (np.nan, np.nan)
+            rows.append({"quantity": key, "point": float(val),
+                         "lo": float(lo), "hi": float(hi)})
+            if cens > 0 or key.startswith("crossing_"):
+                rows.append({"quantity": f"{key}_censored",
+                             "point": float(~np.isfinite(val)),
+                             "lo": float(cens), "hi": float(cens)})
+        else:
+            lo, hi = np.nanquantile(r, q, axis=0)
+            table[key], table[f"{key}_lo"], table[f"{key}_hi"] = val, lo, hi
+            if (cens > 0).any():
+                table[f"{key}_censored"] = cens
+    return table, pd.DataFrame(rows)
 
 
 def _require_positive(xs: np.ndarray, name: str, log_x: bool) -> None:
@@ -475,11 +526,9 @@ def value_data(df: pd.DataFrame, x: str, value: str, item: str = "item_id",
     rules as `axis_data` (every item at every x, or dropped and reported).
     Rows whose value is missing (errors, unparsed, truncated) are left out
     first, so an item missing its value anywhere is dropped and counted."""
-    d = df
-    if "status" in d.columns:
-        d = d[d["status"] == "ok"]
+    d = _ok_rows(df)
     d = d[d[value].notna()]
-    xs, per_x, items, codes, n_dropped = _align(d, x, item, cluster)
+    xs, per_x, items, codes, n_dropped = _align(d, x, item, cluster, df[item])
     V = np.stack([per_x[v].loc[items, value].to_numpy(float) for v in xs], 1)
     return ValueData(xs.astype(float), items, codes, V, n_dropped)
 
@@ -504,29 +553,11 @@ def value_curves(df: pd.DataFrame, x: str, value: str,
     Wi = W[:, data.cluster]                                   # (1+B, items)
     mean = _wsum(Wi, data.V) / Wi.sum(1, keepdims=True)       # (1+B, n_x)
     chi = susceptibility(data.x, mean, log=log_x)
-    i = np.argmax(chi, 1)
-    b = np.arange(len(W))
-    scal = {"peak_x": data.x[i], "peak_chi": chi[b, i],
-            "peak_at_edge": ((i == 0) | (i == len(data.x) - 1)).astype(float)}
-    for lv in levels:
-        scal[f"crossing_{lv:g}"] = crossing(data.x, mean, lv, log=log_x)
-    q = [alpha / 2, 1 - alpha / 2]
-    table = pd.DataFrame({x: data.x})
-    for name, arr in (("mean", mean), ("chi", chi)):
-        lo, hi = np.nanquantile(arr[1:], q, axis=0)
-        table[name], table[f"{name}_lo"], table[f"{name}_hi"] = arr[0], lo, hi
-    rows = []
-    for name, arr in scal.items():
-        reps = arr[1:]
-        ok = np.isfinite(reps)
-        lo, hi = (np.quantile(reps[ok], q) if ok.any() else (np.nan, np.nan))
-        rows.append({"quantity": name, "point": float(arr[0]),
-                     "lo": float(lo), "hi": float(hi)})
-        if name.startswith("crossing_"):
-            rows.append({"quantity": f"{name}_censored",
-                         "point": float(~np.isfinite(arr[0])),
-                         "lo": float(1 - ok.mean()), "hi": float(1 - ok.mean())})
-    reps = {"mean": mean[1:], "chi": chi[1:],
-            **{n: a[1:] for n, a in scal.items()}}
-    return _with_caveats(AxisCurves(table, pd.DataFrame(rows), reps,
-                                    len(data.items), data.n_dropped), k)
+    every = {"mean": mean, "chi": chi, **_peak(data.x, chi)[1],
+             **{f"crossing_{lv:g}": crossing(data.x, mean, lv, log=log_x)
+                for lv in levels}}                  # row 0 the point value
+    reps = {n: a[1:] for n, a in every.items()}
+    table, peak = _tabulate(x, data.x, {n: a[0] for n, a in every.items()},
+                            reps, alpha)
+    return _with_caveats(AxisCurves(table, peak, reps, len(data.items),
+                                    data.n_dropped), k)

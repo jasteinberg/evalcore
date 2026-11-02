@@ -1,0 +1,9 @@
+#!/bin/sh
+# Installed by `make hooks`.  Blocks a commit that changes library code with
+# no test change, or that fails the CI checks.  The interpreter is $PYTHON if
+# set, else `python` on PATH.  The checks run on the working tree, which can
+# differ from what is staged.  Skip once with `git commit --no-verify`.
+set -e
+PY="${PYTHON:-python}"
+"$PY" scripts/check_tests_touched.py --staged
+make check PYTHON="$PY"

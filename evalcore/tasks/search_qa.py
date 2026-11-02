@@ -41,8 +41,6 @@ from typing import Any
 from ..core.search import CorpusSearch
 from ..core.spec import Item
 from .base import Task
-from .formats import render_canonical
-from .graders import make_score
 
 __all__ = ["World", "make_world", "search_qa", "search_qa_items"]
 
@@ -155,6 +153,5 @@ def search_qa(n_towns: int = 20, seed: int = 0, k: int = 3
     the agent loop, `.docs`).  For another retriever, build
     `CorpusSearch(world.docs, retriever)` over `make_world(n_towns, seed)`."""
     world = make_world(n_towns, seed)
-    return (Task(f"search_qa_{n_towns}", search_qa_items(world, seed),
-                 render=render_canonical, score=make_score()),
+    return (Task(f"search_qa_{n_towns}", search_qa_items(world, seed)),
             CorpusSearch(world.docs, k=k))

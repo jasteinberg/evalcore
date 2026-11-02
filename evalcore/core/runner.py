@@ -79,6 +79,15 @@ from .spec import Unit, digest
 Render = Callable[[Unit], Request]
 Score = Callable[[Unit, Response], dict[str, Any]]
 
+# Columns the runner writes into every row.  A cell param or tag with one of
+# these names, or with the `meta_` prefix the response's meta is spread
+# under, would overwrite the runner's value or be overwritten by it, and
+# the row would then describe a different unit or response than the one it
+# came from.  Refused by `plan`, before any call.
+RUNNER_COLUMNS = frozenset({
+    "cell_id", "item_id", "cluster", "group", "repeat", "unit_id", "text",
+    "error", "cached", "request_key", "status", "parse_error"})
+
 
 class ParseFailure(ValueError):
     """Raised by a scorer that cannot read an answer out of a response.
@@ -121,6 +130,7 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     backend default changes the request_key, so the unit is redone and the
     new row supersedes the old."""
     units = list(units)[:limit]
+    _refuse_clashes(units)
     keys = {u.id: request_key(render(u), u.repeat, backend) for u in units}
     state = SinkState(out)
     p = Plan(units, keys, [], unreadable=state.unreadable)
@@ -134,6 +144,34 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
             p.stale += 1
             p.todo.append(u)
     return p
+
+
+def _refuse_clashes(units: Sequence[Unit]) -> None:
+    """Refuse a plan whose rows could not each describe their own unit.
+
+    Two units with one unit_id but different items (an item_id reused for a
+    different question) would share a row: resume and `to_frame` keep the
+    last, so one answer is silently lost.  A cell param or tag named like a
+    runner column (RUNNER_COLUMNS, or `meta_*`) would be overwritten in the
+    row, or overwrite it."""
+    seen: dict[str, str] = {}
+    names: set[str] = set()
+    for u in units:
+        it = u.item
+        content = digest({"payload": dict(it.payload), "group": it.group,
+                          "parent_id": it.parent_id})
+        if seen.setdefault(u.id, content) != content:
+            raise ValueError(
+                f"item_id {it.item_id!r} names two different items (payload, "
+                f"group or parent differ); item ids must be unique, or one "
+                f"item's rows would silently replace the other's")
+        names.update(u.cell.params, u.cell.tags)
+    bad = sorted(n for n in names
+                 if n in RUNNER_COLUMNS or str(n).startswith("meta_"))
+    if bad:
+        raise ValueError(
+            f"cell param/tag name(s) {bad} clash with columns the runner "
+            f"writes ({sorted(RUNNER_COLUMNS)} and meta_*); rename them")
 
 
 def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
@@ -225,7 +263,10 @@ def _call(ctx: _Context, reqs: list[Request], rkeys: list[str]
         if refusal:
             resps[i] = Response(rq.unit_id, error=f"fatal: {refusal}")
         elif hit is not None:
-            resps[i] = Response(rq.unit_id, hit.get("text"), hit.get("meta", {}),
+            meta = dict(hit.get("meta", {}))
+            if "arrays" in meta:
+                meta["arrays"] = _sidecar(ctx, rkeys[i])
+            resps[i] = Response(rq.unit_id, hit.get("text"), meta,
                                 hit.get("error"), cached=True)
         else:
             pending.append(i)
@@ -246,13 +287,28 @@ def _call(ctx: _Context, reqs: list[Request], rkeys: list[str]
         for i, rp in zip(pending, _join(sub, fresh), strict=True):
             meta, arrays = split_arrays(rp.meta or {})
             if arrays:
-                f = ctx.store.put(rkeys[i], arrays)
-                meta["arrays"] = os.path.relpath(f, ctx.out.parent)
+                ctx.store.put(rkeys[i], arrays)
+                meta["arrays"] = _sidecar(ctx, rkeys[i])
             rp.meta = meta
             resps[i] = rp
             if ctx.cache and rp.ok:
                 ctx.cache.put(rkeys[i], {"text": rp.text, "meta": rp.meta})
     return filled(resps)
+
+
+def _sidecar(ctx: _Context, rkey: str) -> str:
+    """A row's `meta_arrays`: the sidecar's path relative to THIS sink.
+
+    Computed per sink, never taken from the cache: the cached meta carries
+    the path relative to whichever sink first wrote it, which from a sink
+    in another directory points at nothing (or at another file).  The
+    sidecar itself is keyed on the request key, so it is the same file."""
+    f = ctx.store.path(rkey)
+    if not f.exists():
+        raise FileNotFoundError(
+            f"array sidecar {str(f)!r} for request {rkey} is missing; the "
+            f"cache entry refers to it, so the cache directory was edited")
+    return os.path.relpath(f, ctx.out.parent)
 
 
 def _row(u: Unit, rkey: str, rp: Response, score: Score) -> dict[str, Any]:
@@ -268,8 +324,17 @@ def _row(u: Unit, rkey: str, rp: Response, score: Score) -> dict[str, Any]:
         row["status"] = "truncated"           # cut off: not an answer
     else:
         try:
-            row.update(score(u, rp))
-            row["status"] = "ok"
+            scores = score(u, rp)
+            clash = sorted(set(scores) & set(row))
+            if clash:
+                # a score named like an identity, param or response column
+                # would re-key or rewrite the row: a scorer bug, so an
+                # error row that keeps the unit's own columns
+                row.update(status="error", error=f"score: returned {clash}, "
+                           f"which name columns the row already has")
+            else:
+                row.update(scores)
+                row["status"] = "ok"
         except ParseFailure as exc:
             row.update(status="unparsed", parse_error=str(exc))
         except Exception as exc:  # noqa: BLE001 - a scorer bug is a row, too

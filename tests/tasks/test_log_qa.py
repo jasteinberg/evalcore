@@ -4,6 +4,7 @@ separate right, wrong, hallucinated and unreadable."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import random
@@ -45,9 +46,7 @@ def test_traces_are_well_formed(seed):
                                                          b.attempt - 1)
 
 
-def test_same_seed_same_items_and_formats_carry_every_span():
-    a = log_qa_items(n_traces=5, seed=3)
-    assert a == log_qa_items(n_traces=5, seed=3)
+def test_every_format_carries_every_span():
     spans = generate_trace(random.Random(0), n_spans=15)
     for fmt in FORMATS:
         text = serialise(spans, fmt)
@@ -155,3 +154,64 @@ def test_graded_end_to_end(tmp_path, mode):
         assert set(unparsed["group"]) >= {"count", "slowest", "parent",
                                           "any_fail", "failed_ids"}
         assert unparsed["correct"].isna().all()
+
+
+def test_d11_regeneration_and_prefix_stability():
+    """D11.  Invariance: the same seed reproduces the items exactly, and
+    asking for more traces extends the list without changing its prefix
+    (so a larger run contains the smaller one)."""
+    def make(n):
+        return log_qa_items(n_traces=n, fmt="log", n_spans=8, seed=5)
+    small = make(6)
+    assert make(6) == small
+    assert make(12)[:len(small)] == small
+
+
+_START = re.compile(r"t=(\d+)ms START (\S+) id=(\S+)")
+_END = re.compile(r"t=(\d+)ms END \S+ id=(\S+) status=(\S+)")
+
+
+def _spans(item):
+    """{span id: (name, start_ms, end_ms, status)}, read from the context
+    text by a parser written here: json.loads for json, regexes for log."""
+    text = item.payload["messages"][1]["content"].split("Trace:\n", 1)[1] \
+        .split("\n\nQuestion:", 1)[0]
+    if item.payload["meta"]["fmt"] == "json":
+        return {s["id"]: (s["name"], s["start_ms"], s["end_ms"], s["status"])
+                for s in json.loads(text)}
+    start = {i: (n, int(t)) for t, n, i in _START.findall(text)}
+    end = {i: (int(t), st) for t, i, st in _END.findall(text)}
+    assert set(start) == set(end) and start
+    return {i: (start[i][0], start[i][1], *end[i]) for i in start}
+
+
+@pytest.mark.parametrize("position", [None, 0.5])
+def test_d9_fmt_axis_is_paired(position):
+    """D9.  Invariance: fmt only re-serialises a trace, so json and log
+    under one seed hold the same 20 traces (every span's name, times and
+    status, parsed from each text independently); with position unset the
+    item ids and golds are equal too."""
+    a = log_qa_items(n_traces=20, fmt="json", n_spans=10, seed=3,
+                     position=position)
+    b = log_qa_items(n_traces=20, fmt="log", n_spans=10, seed=3,
+                     position=position)
+    ta = {i.payload["meta"]["trace"]: _spans(i) for i in a}
+    tb = {i.payload["meta"]["trace"]: _spans(i) for i in b}
+    assert len(ta) == 20 and ta == tb
+    if position is None:
+        assert [i.item_id for i in a] == [i.item_id for i in b]
+        assert [i.payload["gold"] for i in a] == [i.payload["gold"] for i in b]
+
+
+@pytest.mark.parametrize("fmt,sha", [
+    # Recorded 31 Oct from the generator as it was before the D9 fix, which
+    # must leave the position=None stream untouched.
+    ("json", "a7f4283301ef669e"),
+    ("log", "9ac5437f95022a2e"),
+    ("tree", "4e195c4f43745fd0"),
+])
+def test_unpositioned_items_are_pinned(fmt, sha):
+    its = log_qa_items(n_traces=20, fmt=fmt, n_spans=10, seed=3)
+    rows = [[i.item_id, i.payload, i.group, i.parent_id] for i in its]
+    got = hashlib.sha256(json.dumps(rows, sort_keys=True).encode())
+    assert len(its) == 174 and got.hexdigest()[:16] == sha

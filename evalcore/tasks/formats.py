@@ -20,8 +20,10 @@ formats need only the dict.
 
 Validation is strict and names the record: a missing id, a duplicate id, a
 prompt AND messages (or neither), an unknown field (a typo such as "glod"
-would otherwise silently drop the gold), an unknown grader, a grader with
-no gold.  Nothing is defaulted.
+would otherwise silently drop the gold), an unknown grader, a grader option
+it does not take (a typo such as "rell"), a grader with no gold, and a gold
+the grader can never score (one that normalises to "", a label outside its
+options).  Nothing is defaulted.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from typing import Any
 
 from ..core.backends import Request
 from ..core.spec import Item, Unit
-from .graders import GRADERS
+from .graders import GRADERS, check_spec
 
 __all__ = ["CANONICAL_FIELDS", "TaskFormatError", "load_tasks",
            "render_canonical", "save_tasks"]
@@ -137,6 +139,10 @@ def _validate(c: dict[str, Any], i: int) -> None:
         if "gold" not in c and name != "abstain":
             raise TaskFormatError(f"record {i} ({c['id']}): grader {name!r} "
                                   f"needs a 'gold'")
+        try:
+            check_spec(spec, *((c["gold"],) if "gold" in c else ()))
+        except ValueError as exc:
+            raise TaskFormatError(f"record {i} ({c['id']}): {exc}") from exc
     if "gold_docs" in c:
         g = c["gold_docs"]
         ok = (isinstance(g, list) and all(isinstance(d, str) for d in g)) or (

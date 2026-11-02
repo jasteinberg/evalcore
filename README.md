@@ -16,7 +16,7 @@ says what the data can actually resolve.
 
 ```bash
 python -m pip install -e ".[http,dev]"     # extras: http, hf, retrieval, dev
-pytest -q
+make check                                 # ruff, mypy and pytest, as CI runs them
 ```
 
 From Python:
@@ -60,6 +60,38 @@ arguments:
  "options": {"prices": {"in": 1.0, "out": 5.0}, "max_cost": 2.0}}
 ```
 
+## Types of Experiments
+
+Each kind of experiment is a choice of what the `Request` carries and
+which backend answers it. Everything after that, the cache, resume,
+statuses and statistics, is the same for all of them.
+
+| experiment | the request carries | backend | the row gets (`meta_*`) | analyse with |
+|---|---|---|---|---|
+| graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts, `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two arms |
+| teacher-forced scoring | `target`: the continuation to score | `HFBackend` | per target token `logp`, `argmax_ok`; `sum_logp`, `em_tf` | `tasks.graders.score_teacher_forced`; `axis_curves` along a model axis |
+| candidate scoring | `candidates`: token ids, prompt as text or `input_ids` | `HFBackend` | `cand_logp` over the full vocabulary, `cand_mass`, `leakage`, `top1_id` | your own `score`; `value_curves` along a swept setting |
+| activation capture | any of the above | `HFBackend(probe=...)` | what the probe's `collect` returns; arrays go to an `.npz` sidecar named in `meta_arrays` | `load_arrays` |
+| interventions (patching, steering) | any of the above | `HFBackend(probe=...)` whose hook returns a replacement output | as above | one backend per setting: the probe's identity names it |
+| many prompts sharing a prefix | any `HFBackend` request | `HFBackend(prefix_cache=True, prefix_slots=K)` | `n_prefix_reused`, `prefix_slot` | outputs equal to a full forward, within float tolerance |
+| tool use | `messages`; the tools come from the backend | `AgentBackend(inner, tools)` | `trajectory`, `turns`, `n_tool_calls`, `tool_input_errors`, `truncated_by` | `attrition`: `tool_error` and `truncated` are their own states |
+| retrieval | items with `gold_docs` | `RetrieverBackend` over `BM25`, `DenseRetriever`, `Reranker` | the ranked document ids | `score_ranked`, `retrieval_summary` |
+
+Across all of them:
+
+- **Repeats and paraphrases** (`repeats=`, `Item.parent_id`) cluster with
+  their source item, and every interval resamples clusters (see The one
+  idea below). `icc1` and `plots.deff_curve` say how much the extra rows bought.
+- **Sweeps** are grid axes. `value_curves` and `axis_curves` give the mean
+  at each point, its slope `chi = d mean / d log x`, the peak and level
+  crossings, all with intervals paired across points.
+- **Floors and contamination.** `baselines.floors` and `headroom` give the
+  score available for free from the label distribution.
+  `contamination.report` measures n-gram overlap with a reference corpus.
+
+`examples/probe_example.py` and `examples/agent_example.py` run two of
+these end to end with nothing to download.
+
 ## The harness loop
 
 ```
@@ -100,7 +132,7 @@ off with `None`:
 | stage | what it does |
 |---|---|
 | `calibrate` | a few real calls on the experiment's own requests; latency, tokens, rate-limit headers, or the throughput of each batch size for a local model; derives workers and batch size and lists every assumption |
-| `dry_run` | the resume decisions and the estimated spend without calling anything; halts above `max_cost` |
+| `dry_run` | the resume decisions and the estimated spend without calling anything; halts above `max_cost`, or when calibration measured no token counts to estimate the spend from |
 | `execute` | the loop above |
 | `analyse` | every analysis in `analyses` (default: attrition, plus the bootstrap summary of `metric`), each written as CSV |
 | `report` | `run.json`: the experiment, options, calibration, plan, event summary, outputs and provenance (evalcore commit, library versions) |
@@ -124,7 +156,7 @@ locally.
 | `spec.py` | `Cell`, `Item`, `Unit`, `grid`, `digest`: content-addressed identity |
 | `backends/base.py` | `Request`, `Response`, the `Backend` contract, `request_key`, retries |
 | `backends/http.py` | `HTTPBackend`: Anthropic, OpenAI and Gemini, including tool calls |
-| `backends/hf.py` | `HFBackend`: local generation, teacher-forced scoring, candidate scoring |
+| `backends/hf.py` | `HFBackend`: local generation, teacher-forced scoring, candidate scoring, opt-in prefix KV-cache reuse |
 | `backends/probe.py` | `Probe`, `FunctionProbe`: capture from inside each forward pass |
 | `backends/cache.py` | `Cache`: one JSON file per request key |
 | `backends/echo.py`, `function.py` | `EchoBackend`, `FunctionBackend`: offline and user-supplied models |
@@ -168,6 +200,7 @@ locally.
 | `registry.py` | named factories for every component kind, yours included |
 | `config.py` | an `Experiment` from JSON, built through the registry |
 | `__main__.py` | the command line: `run`, `summarize`, `list` |
+| `testing.py` | `assert_same`: two results that must agree, compared with a stated tolerance; the golden snapshots use it |
 
 ## Extension points
 
@@ -178,7 +211,7 @@ small interface at each point and checks it.
 |---|---|---|
 | a model | `Backend.identity()` and `complete` (or `complete_batch`) | `identity()` is required: it keys the cache, so it must name everything that changes an output |
 | a quick model | `FunctionBackend(fn, identity=...)` | `fn(request) -> str` |
-| activation capture | `Probe.identity`, `hooks`, `collect` | hooks see the padded batch; `collect` returns one dict per request; arrays go to sidecars |
+| activation capture | `Probe.identity`, `hooks`, `collect` | hooks see the padded batch (only the uncached tail under `prefix_cache`); `collect` returns one dict per request; arrays go to sidecars |
 | a task | `Task(name, items, render, score)`, or a JSONL file | `Task.from_file(path, mapping=...)` for a foreign format |
 | a grader | `@grader("name")` in `tasks/graders.py` | raise `ParseFailure` when the answer cannot be read |
 | a tool | `Tool(name, description, parameters, fn)` | `ToolInputError` goes back to the model; `ToolUnavailable` ends the episode as `tool_error` |
@@ -220,7 +253,42 @@ The kinds are `task`, `backend`, `score`, `retriever`, `embedder`, `index`,
 the experiment declares it as a keyword-only parameter (`*, docs` for a
 retriever's corpus, `*, task` for a scorer); the experiment supplies it,
 and a config cannot override it.
-## What the harness guarantees
+## Writing a probe
+
+A `Probe` runs around every forward pass of `HFBackend`: `start(enc,
+reqs)` before it, `hooks()` installed for its duration, `collect(out, enc,
+reqs)` after it, which returns one dict per request. Hooks see the whole
+padded batch, and `enc` is how a probe finds its rows in it:
+
+| key | meaning |
+|---|---|
+| `input_ids`, `attention_mask` | the full sequence, cached positions included |
+| `padding_side` | `"left"` when generating or running a plain forward, `"right"` for candidates and targets |
+| `last` | (candidates) per row, the position of the last prompt token |
+| `n_prompt` | (targets) per row, the number of prompt tokens |
+| `n_prefix_reused` | per row, how many leading positions came from the prefix cache and were not fed (0 without it) |
+
+Positions in `enc` are always positions in the full prompt. Under
+`prefix_cache` the first forward is fed only the uncached tail, so full
+position `p` is hook index `p - n_prefix_reused`. The read position, the
+last prompt token, is always the last index the hook sees.
+
+Two rules:
+
+- **Name what you capture.** `identity()` is part of the request key, so it
+  must change whenever what the probe returns or changes does: layer,
+  positions, scale, vector.
+- **Patch only the read position or later.** Under `prefix_cache` the
+  positions before it are stored and reused by later calls. A patch there
+  would leak into calls that did not ask for it. A patch at the read
+  position cannot reach them, because of the causal mask.
+
+Every hooked module must run `calls_per_forward` times per forward
+pass (once, by default), and a module pattern that matches nothing raises,
+so an intervention that never ran cannot look like a null result. The
+key-by-key contract is in the docstring of `HFBackend._probing`.
+
+## Guarantees
 
 - **One key per call.** `request_key = digest(request, backend.identity(),
   repeat)`. The cache, resume and every row use it. A changed prompt, model,
@@ -318,6 +386,19 @@ For `out="runs/x.jsonl"`:
 | `runs/x.jsonl.calibration.json` | the calibration, reused while fresh |
 | `runs/x.jsonl.analysis/*.csv` | attrition and summary tables |
 | `runs/x.jsonl.run.json` | the report |
+| `runs/x.jsonl.done` | the job hash and its status (running or complete); on resume a complete job skips its model calls and only re-analyses |
+
+## Outside the package
+
+| path | contents |
+|---|---|
+| `examples/worked_example.py` | a two-arm eval against a scripted model, printing what flows through each stage |
+| `examples/probe_example.py` | steering inside a tiny random-init Qwen2, swept over a scale: candidate scoring, activation capture to sidecars, `value_curves` |
+| `examples/agent_example.py` | a scripted tool-calling model under `AgentBackend`, reaching every episode outcome, with `attrition` |
+| `scripts/preflight.py` | checks an API endpoint before a sweep: auth, request shape, truncation, latency, rate-limit headers |
+| `GLOSSARY.md` | the vocabulary, and the terms that collide |
+| `tests/golden/` | snapshots of end-to-end outputs; `make snapshots` rewrites them for review |
+| `.githooks/pre-commit` | `make hooks` enables it: blocks a commit that changes library code without a test change, or fails `make check` |
 
 ## Vendoring
 

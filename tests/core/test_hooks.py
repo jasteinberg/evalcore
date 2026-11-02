@@ -67,9 +67,31 @@ def test_an_identity_hook_changes_nothing_and_an_edit_takes_effect():
 
 
 def test_pre_hooks_with_kwargs_see_the_inputs():
+    """The first layer's pre-hook receives the network's input itself."""
     m = net()
     got = []
-    with hooked(m, {"0.0": lambda n, mod, args, kwargs: got.append(
-            args[0].shape)}, pre=True, with_kwargs=True):
+    with hooked(m, {"0.0": lambda n, mod, args, kwargs: got.append(args[0])},
+                pre=True, with_kwargs=True):
         m(X)
-    assert got == [torch.Size([2, 4])]
+    assert len(got) == 1 and torch.equal(got[0], X)
+
+
+def test_a4_check_counts_names_a_hooked_module_that_never_ran():
+    """A4. Hand-built net: `used` runs once per forward, `unused` never.
+    Both are hooked by "*", so expecting 1 call each must fail naming
+    `unused`."""
+
+    class Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.used = torch.nn.Linear(2, 2)
+            self.unused = torch.nn.Linear(2, 2)
+
+        def forward(self, x):
+            return self.used(x)
+
+    m = Net()
+    with hooked(m, {"*": lambda name, mod, *a: None}) as counts:
+        m(torch.zeros(1, 2))
+    with pytest.raises(AssertionError, match="unused"):
+        check_counts(counts, 1)

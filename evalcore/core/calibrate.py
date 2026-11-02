@@ -18,10 +18,10 @@ import time
 import warnings
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 from .backends import Backend, Request, Response
+from .records import utc_now
 from .spec import digest
 
 __all__ = ["Calibration", "calibrate", "calibration_caveats", "derive"]
@@ -58,9 +58,7 @@ def calibrate(backend: Backend, requests: Sequence[Request], n: int = 5,
     """Real calls on up to `n` of `requests` (or, for a local model, the
     throughput ladder over `batch_sizes`).  Failures are recorded in
     `errors`, not raised: a calibration that reports a 400 is a result."""
-    cal = Calibration(digest(backend.identity()),
-                      datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                      0)
+    cal = Calibration(digest(backend.identity()), utc_now(), 0)
     sample = list(requests)[:n]
     if not sample:
         cal.errors.append("no requests to calibrate on")

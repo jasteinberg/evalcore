@@ -29,7 +29,6 @@ from typing import Any
 
 from ..core.spec import Item
 from .base import Task
-from .formats import render_canonical
 from .graders import score_teacher_forced
 
 __all__ = ["arithmetic_items", "arithmetic_task", "leak_rate"]
@@ -39,9 +38,13 @@ _OPS = {"+": lambda a, b: (a, b, a + b),
         "*": lambda a, b: (a, b, a * b)}
 
 
+def _low(digits: int) -> int:
+    """The smallest d-digit operand (0 for d = 1)."""
+    return 10 ** (digits - 1) if digits > 1 else 0
+
+
 def _draw(rng: random.Random, digits: int, op: str) -> tuple[int, int, int]:
-    lo = 10 ** (digits - 1) if digits > 1 else 0
-    hi = 10 ** digits - 1
+    lo, hi = _low(digits), 10 ** digits - 1
     a = rng.randint(lo, hi)
     b = rng.randint(lo, hi)
     return _OPS[op](a, b)
@@ -64,8 +67,7 @@ def arithmetic_items(digits: int = 2, n_items: int = 1024, n_shots: int = 4,
     makes the answer length equal its digit count."""
     if op not in _OPS:
         raise ValueError(f"op must be one of {sorted(_OPS)}")
-    lo = 10 ** (digits - 1) if digits > 1 else 0
-    space = (10 ** digits - lo) ** 2
+    space = (10 ** digits - _low(digits)) ** 2
     rng = random.Random(seed)
     items: list[Item] = []
     seen: set[tuple[int, int]] = set()
@@ -105,5 +107,4 @@ def arithmetic_task(digits: int = 2, n_items: int = 1024, n_shots: int = 4,
     items = arithmetic_items(digits, n_items, n_shots, op, seed, spaced,
                              exclude_leaks)
     name = {"+": "add", "-": "sub", "*": "mul"}[op]
-    return Task(f"{name}_d{digits}", items, render=render_canonical,
-                score=score_teacher_forced)
+    return Task(f"{name}_d{digits}", items, score=score_teacher_forced)
