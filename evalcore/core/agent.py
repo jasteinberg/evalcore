@@ -99,7 +99,8 @@ class AgentBackend(Backend):
         for _ in range(self.max_turns):
             r = with_retries(self.inner.complete,
                              Request(req.unit_id, msgs, req.params,
-                                     tools=specs), self.attempts)
+                                     tools=specs, repeat=req.repeat),
+                             self.attempts)
             if not r.ok:
                 return done(error=f"model: {r.error}", truncated=False)
             rm = r.meta or {}

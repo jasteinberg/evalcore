@@ -38,7 +38,7 @@ from evalcore import (
     grid,
     units,
 )
-from evalcore.core.backends import ADAPTERS, DECODE_KEYS, request_key
+from evalcore.core.backends import ADAPTERS, DECODE_KEYS, EchoBackend, request_key
 
 MSGS = [{"role": "system", "content": "be terse"},
         {"role": "user", "content": "2+2?"}]
@@ -51,7 +51,20 @@ def test_request_fields_are_the_ones_the_cache_key_covers():
     cache_key is taught about it -- a field outside the key is a stale hit."""
     assert {f.name for f in dataclasses.fields(Request)} == {
         "unit_id", "messages", "params", "target", "tools", "input_ids",
-        "candidates"}
+        "candidates", "repeat"}
+    # `repeat` is the exception: request_key covers it (below), and putting
+    # it in cache_key as well would move every existing key with repeat >= 1
+
+
+def test_request_key_moves_with_repeat_and_refuses_a_conflicting_one():
+    b = EchoBackend()
+    req = Request("u", MSGS, {})
+    keys = {request_key(req, r, b) for r in range(3)}
+    assert len(keys) == 3
+    assert request_key(dataclasses.replace(req, repeat=2), 2, b) == \
+        request_key(req, 2, b)               # the field itself moves nothing
+    with pytest.raises(ValueError, match="repeat=2"):
+        request_key(dataclasses.replace(req, repeat=2), 1, b)
 
 
 def test_input_ids_and_candidates_move_the_cache_key():

@@ -47,7 +47,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -116,6 +116,18 @@ class Plan:
         return len(self.units) - len(self.todo)
 
 
+def rendered(render: Render, u: Unit) -> Request:
+    """`render(u)` carrying the unit's repeat index.  The runner owns the
+    repeat: a render that sets a different one is refused."""
+    req = render(u)
+    if req.repeat == u.repeat:
+        return req
+    if req.repeat != 0:
+        raise ValueError(f"render set repeat={req.repeat} on unit {u.id} "
+                         f"with repeat {u.repeat}")
+    return replace(req, repeat=u.repeat)
+
+
 def plan(units: Iterable[Unit], backend: Backend, render: Render,
          out: str | Path, resume: bool = True, retry_errors: bool = True,
          limit: int | None = None) -> Plan:
@@ -131,7 +143,8 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     new row supersedes the old."""
     units = list(units)[:limit]
     _refuse_clashes(units)
-    keys = {u.id: request_key(render(u), u.repeat, backend) for u in units}
+    keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
+            for u in units}
     state = SinkState(out)
     p = Plan(units, keys, [], unreadable=state.unreadable)
     for u in units:
@@ -344,7 +357,7 @@ def _row(u: Unit, rkey: str, rp: Response, score: Score) -> dict[str, Any]:
 
 def _batch(ctx: _Context, batch: Sequence[Unit]) -> None:
     rkeys = [ctx.keys[u.id] for u in batch]
-    resps = _call(ctx, [ctx.render(u) for u in batch], rkeys)
+    resps = _call(ctx, [rendered(ctx.render, u) for u in batch], rkeys)
     for u, rk, rp in zip(batch, rkeys, resps, strict=True):
         row = _row(u, rk, rp, ctx.score)
         ctx.sink.write(row)

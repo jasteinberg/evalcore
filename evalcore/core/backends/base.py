@@ -55,7 +55,12 @@ class Request:
     (for prompts built in token space, where text would not round-trip),
     and `candidates` asks for the next-token distribution restricted to a
     set of token ids.  These need a backend that reads logits
-    (`supports_target`, i.e. `HFBackend`)."""
+    (`supports_target`, i.e. `HFBackend`).
+
+    `repeat` is the unit's repeat index, set by the runner, for a backend
+    whose output is a seeded function of it (a sampled retriever).  It is
+    not in `cache_key`: `request_key` adds the repeat itself, so keys are
+    the same with or without this field."""
 
     unit_id: str
     messages: Sequence[Mapping[str, Any]]
@@ -64,6 +69,7 @@ class Request:
     tools: Sequence[Mapping[str, Any]] | None = None
     input_ids: Sequence[int] | None = None
     candidates: Sequence[int] | None = None
+    repeat: int = 0
 
     @property
     def cache_key(self) -> str:
@@ -274,7 +280,11 @@ def request_key(req: Request, repeat: int, backend: Backend) -> str:
 
     The cache is keyed on it, and every row records it, so resume can tell
     a finished unit from one whose prompt, item, backend defaults or repeat
-    changed since its row was written."""
+    changed since its row was written.  `req.repeat`, when set (the runner
+    sets it), must be this `repeat`: two disagreeing sources are refused."""
+    if req.repeat not in (0, repeat):
+        raise ValueError(f"request {req.unit_id} carries repeat={req.repeat} "
+                         f"but is keyed with repeat={repeat}")
     return digest({"request": req.cache_key, "backend": backend.identity(),
                    "repeat": repeat})
 

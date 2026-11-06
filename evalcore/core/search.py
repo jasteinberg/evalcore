@@ -43,8 +43,12 @@ digest(identity, query, repeat): a fresh generator is seeded from that
 digest for every query, and no stream advances across calls.  A draw is
 therefore fixed by its key, whatever the call order or batch, which is what
 makes it cacheable.  The same (query, repeat) twice gives the same draw.
-Independent draws need distinct `repeat` (the role of Unit.repeat), or a
-distinct `seed`.  The noise comes from numpy's Generator, so it is bitwise
+Independent draws need distinct `repeat`, or a distinct `seed`.  Through
+the runner, `repeat` is the unit's: the runner sets Request.repeat and
+RetrieverBackend passes it on (a Reranker forwards it to its first stage).
+`search_tool` has no unit to read it from and draws at repeat 0, so an
+agent's searches for one query are the same draw in every repeat of the
+unit.  The noise comes from numpy's Generator, so it is bitwise
 reproducible within a numpy version but not promised across versions.
 
 Indexes.  `ExactIndex` is brute-force cosine (or dot product) in numpy:
@@ -114,7 +118,11 @@ _WORD = re.compile(r"[a-z0-9]+")
 
 class Retriever(Protocol):
     def identity(self) -> dict[str, Any]: ...
-    def retrieve(self, queries: Sequence[str], k: int) -> list[list[Hit]]: ...
+    def retrieve(self, queries: Sequence[str], k: int,
+                 repeat: int = 0) -> list[list[Hit]]:
+        """Top k per query.  `repeat` is the unit's repeat index: a sampled
+        retriever seeds its draw with it, a deterministic one ignores it."""
+        ...
 
 
 class ScoredRetriever(Retriever, Protocol):
@@ -193,7 +201,8 @@ class BM25:
         return list(self.ids), np.array([self.scores(q) for q in queries],
                                         float).reshape(len(queries), len(self.ids))
 
-    def retrieve(self, queries: Sequence[str], k: int) -> list[list[Hit]]:
+    def retrieve(self, queries: Sequence[str], k: int,
+                 repeat: int = 0) -> list[list[Hit]]:
         out = []
         for q in queries:
             s = self.scores(q)
@@ -399,7 +408,8 @@ class DenseRetriever:
                 "embedder": self.embedder.identity(),
                 "index": self.index.identity()}
 
-    def retrieve(self, queries: Sequence[str], k: int) -> list[list[Hit]]:
+    def retrieve(self, queries: Sequence[str], k: int,
+                 repeat: int = 0) -> list[list[Hit]]:
         Q = self.embedder.embed(list(queries), "query", self.cache)
         idx, sc = self.index.search(Q, k)
         return [[(self.ids[j], float(v)) for j, v in zip(ir, sr, strict=True)
@@ -493,10 +503,11 @@ class Reranker:
         return {"retriever": "rerank", "first": self.first.identity(),
                 "scorer": self.scorer.identity(), "depth": self.depth}
 
-    def retrieve(self, queries: Sequence[str], k: int) -> list[list[Hit]]:
+    def retrieve(self, queries: Sequence[str], k: int,
+                 repeat: int = 0) -> list[list[Hit]]:
         out: list[list[Hit]] = []
-        for q, cands in zip(queries, self.first.retrieve(queries, self.depth),
-                            strict=True):
+        first = self.first.retrieve(queries, self.depth, repeat=repeat)
+        for q, cands in zip(queries, first, strict=True):
             ids = [d for d, _ in cands]
             if not ids:
                 out.append([])
@@ -663,7 +674,13 @@ class RetrieverBackend(Backend):
         return self.complete_batch([req])[0]
 
     def complete_batch(self, reqs: Sequence[Request]) -> list[Response]:
-        hits = self.retriever.retrieve([self._query(r) for r in reqs], self.k)
+        hits: list[list[Hit]] = [[] for _ in reqs]
+        for rep in sorted({r.repeat for r in reqs}):       # one call per repeat
+            at = [i for i, r in enumerate(reqs) if r.repeat == rep]
+            for i, h in zip(at, self.retriever.retrieve(
+                    [self._query(reqs[i]) for i in at], self.k, repeat=rep),
+                    strict=True):
+                hits[i] = h
         return [Response(r.unit_id, text="\n".join(d for d, _ in h),
                          meta={"retrieved": [d for d, _ in h],
                                "scores": [s for _, s in h]})

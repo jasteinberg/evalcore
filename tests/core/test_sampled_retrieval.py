@@ -8,6 +8,7 @@ stated law, and are not tuned to the observed values."""
 
 from __future__ import annotations
 
+import io
 import itertools
 import json
 import math
@@ -19,15 +20,20 @@ import numpy as np
 import pytest
 from scipy import stats
 
+from evalcore.core.backends import Request
 from evalcore.core.embed import FunctionEmbedder
+from evalcore.core.runner import execute, rendered
 from evalcore.core.search import (
     BM25,
     DenseRetriever,
     ExactIndex,
+    FunctionScorer,
+    Reranker,
+    RetrieverBackend,
     SampledRetriever,
     search_tool,
 )
-from evalcore.core.spec import digest
+from evalcore.core.spec import Item, Unit, digest, grid, units
 
 ALPHA = 1e-3
 SCORES = {"a": 0.0, "b": 0.5, "c": 1.0, "d": 2.0}
@@ -48,7 +54,7 @@ class Fixed:
     def score_all(self, queries):
         return list(self.ids), np.tile(self.s, (len(queries), 1))
 
-    def retrieve(self, queries, k):
+    def retrieve(self, queries, k, repeat=0):
         order = sorted(range(len(self.ids)),
                        key=lambda j: (-self.s[j], self.ids[j]))[:k]
         return [[(self.ids[j], float(self.s[j])) for j in order]
@@ -262,3 +268,66 @@ def test_identity_names_every_input_and_is_digestable_at_inf():
     assert len(keys) == 6
     tool = search_tool(SampledRetriever(BM25(_DOCS), math.inf, seed=0), _DOCS)
     assert tool.version.startswith("sampled-")
+
+
+# --- the repeat index, from the runner to the draw -----------------------------
+
+FLAT = {f"d{i:02d}": 0.0 for i in range(20)}
+
+
+def _render(u: Unit) -> Request:
+    return Request(u.id, [{"role": "user", "content": u.item.payload["q"]}])
+
+
+def test_runner_stamps_the_unit_repeat_and_refuses_a_conflict():
+    (u0, u1, u2) = units(grid({"x": [1]}), [Item("i", {"q": "dog"})], repeats=3)
+    assert [rendered(_render, u).repeat for u in (u0, u1, u2)] == [0, 1, 2]
+
+    def wrong(u: Unit) -> Request:
+        return Request(u.id, [{"role": "user", "content": "q"}], repeat=5)
+    with pytest.raises(ValueError, match="repeat=5"):
+        rendered(wrong, u1)
+
+
+@pytest.mark.parametrize("batch_size", [1, 6])
+def test_each_repeat_of_a_unit_gets_its_own_draw(tmp_path, batch_size):
+    """Six repeats of one query through the runner.  Row r must hold the
+    draw keyed by repeat r (the direct call is the specification), whether
+    the six share one complete_batch call or not.  With 20 equally scored
+    documents and k = 3, two repeats coincide with probability 1/6840 per
+    pair, so the six are not all equal."""
+    r = SampledRetriever(Fixed(FLAT), 1.0, seed=0)
+    us = list(units(grid({"x": [1]}), [Item("i", {"q": "dog"})], repeats=6))
+    df = execute(us, RetrieverBackend(r, k=3), _render,
+                 lambda u, resp: {"retrieved": resp.meta["retrieved"]},
+                 tmp_path / "r.jsonl", workers=1, batch_size=batch_size,
+                 stream=io.StringIO())
+    got = {int(row.repeat): list(row.retrieved) for row in df.itertuples()}
+    want = {rep: [d for d, _ in r.retrieve(["dog"], 3, repeat=rep)[0]]
+            for rep in range(6)}
+    assert got == want
+    assert len({tuple(v) for v in got.values()}) > 1
+
+
+def test_backend_keeps_request_order_across_mixed_repeats():
+    r = SampledRetriever(Fixed(FLAT), 1.0, seed=0)
+    reqs = [Request(f"u{i}", [{"role": "user", "content": q}], repeat=rep)
+            for i, (q, rep) in enumerate([("a", 1), ("b", 0), ("a", 0),
+                                          ("b", 1)])]
+    out = RetrieverBackend(r, k=3).complete_batch(reqs)
+    for req, resp in zip(reqs, out, strict=True):
+        assert resp.unit_id == req.unit_id
+        assert resp.meta["retrieved"] == [d for d, _ in r.retrieve(
+            [req.messages[0]["content"]], 3, repeat=req.repeat)[0]]
+
+
+def test_reranker_passes_repeat_to_its_first_stage():
+    """A constant scorer keeps the first stage's candidates; the reranker
+    then orders them by id, so its output is the sorted first-stage set."""
+    first = SampledRetriever(Fixed(FLAT), 1.0, seed=0)
+    rr = Reranker(first, FunctionScorer(lambda q, ds: [0.0] * len(ds),
+                                        {"fn": "zero"}), FLAT, depth=4)
+    for rep in range(3):
+        cands = {d for d, _ in first.retrieve(["q"], 4, repeat=rep)[0]}
+        got = rr.retrieve(["q"], 4, repeat=rep)[0]
+        assert [d for d, _ in got] == sorted(cands)
