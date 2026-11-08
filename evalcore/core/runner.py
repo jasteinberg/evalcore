@@ -1,4 +1,6 @@
-"""Batched, cached, resumable runner; JSONL sink; tidy frame.
+"""Plan and execute a sweep: resume decisions, batching, retries, and one
+row per unit, with a status.  The sink, the manifest and the tidy frame
+the rows become are in records.py.
 
 Design commitments, each of which is a lesson rather than a preference:
 

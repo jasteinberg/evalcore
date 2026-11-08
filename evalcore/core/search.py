@@ -14,6 +14,39 @@ A `ScoredRetriever` also gives `score_all`: every document's score, not
 only the top k.  BM25 and a DenseRetriever over an ExactIndex do; an
 approximate index cannot, and refuses.
 
+Ties are broken by document id everywhere, so a ranking is a function of
+the corpus and the query alone.
+
+`search_tool(retriever, docs)` turns any retriever into the agent loop's
+`search` tool, and `RetrieverBackend` runs a retriever through the runner
+(cache, resume, rows), so evaluation/retrieval.py can score it like any
+other model.
+
+Indexes.  `ExactIndex` is brute-force cosine (or dot product) in numpy:
+exact, dependency-free, and fast enough to roughly 1e5-1e6 passages.
+`FaissIndex` (HNSW or IVF; `pip install faiss-cpu`) is approximate, so a
+DenseRetriever over it MEASURES what the approximation costs: recall@k of
+the ANN results against the exact ones on a sample of queries,
+
+    ann_recall@k = < |ANN_k(q) n EXACT_k(q)| / k >_q ,
+
+stored in `ann_recall` and warned about below `min_ann_recall`.  A weaker
+RAG result then shows up as a number, not as a silently worse retriever.
+With documents as the sample queries (the default when no queries are
+given) each query finds itself, which flatters the figure by up to 1/k;
+pass real queries for the honest one.
+
+BM25.  For query terms t and document d of length |d| (average length
+avgdl, N documents, n_t containing t, f_{t,d} occurrences),
+
+    score(q, d) = sum_{t in q} idf_t f_{t,d} (k1 + 1)
+                                / (f_{t,d} + k1 (1 - b + b |d| / avgdl)),
+    idf_t = ln(1 + (N - n_t + 0.5) / (n_t + 0.5)),
+
+the non-negative idf (Lucene's), so a term in most documents adds little
+rather than subtracting.  Terms are lowercase alphanumeric runs; there is
+no stemming.
+
 Sampled retrieval.  With base scores s_i over the n documents of the
 corpus and inverse temperature beta >= 0, put w_i = exp(beta s_i) and
 W = sum_i w_i.  SampledRetriever draws k documents without replacement,
@@ -38,7 +71,7 @@ anything it leaves out (BM25 drops documents sharing no term with the
 query), whereas at finite beta every document is in the population.  The
 returned score is the base score s_i, not z_i.
 
-The noise for one query is a pure function of
+Seeding.  The noise for one query is a pure function of
 digest(identity, query, repeat): a fresh generator is seeded from that
 digest for every query, and no stream advances across calls.  A draw is
 therefore fixed by its key, whatever the call order or batch, which is what
@@ -50,39 +83,6 @@ RetrieverBackend passes it on (a Reranker forwards it to its first stage).
 agent's searches for one query are the same draw in every repeat of the
 unit.  The noise comes from numpy's Generator, so it is bitwise
 reproducible within a numpy version but not promised across versions.
-
-Indexes.  `ExactIndex` is brute-force cosine (or dot product) in numpy:
-exact, dependency-free, and fast enough to roughly 1e5-1e6 passages.
-`FaissIndex` (HNSW or IVF; `pip install faiss-cpu`) is approximate, so a
-DenseRetriever over it MEASURES what the approximation costs: recall@k of
-the ANN results against the exact ones on a sample of queries,
-
-    ann_recall@k = < |ANN_k(q) n EXACT_k(q)| / k >_q ,
-
-stored in `ann_recall` and warned about below `min_ann_recall`.  A weaker
-RAG result then shows up as a number, not as a silently worse retriever.
-With documents as the sample queries (the default when no queries are
-given) each query finds itself, which flatters the figure by up to 1/k;
-pass real queries for the honest one.
-
-Ties are broken by document id everywhere, so a ranking is a function of
-the corpus and the query alone.
-
-BM25.  For query terms t and document d of length |d| (average length
-avgdl, N documents, n_t containing t, f_{t,d} occurrences),
-
-    score(q, d) = sum_{t in q} idf_t f_{t,d} (k1 + 1)
-                                / (f_{t,d} + k1 (1 - b + b |d| / avgdl)),
-    idf_t = ln(1 + (N - n_t + 0.5) / (n_t + 0.5)),
-
-the non-negative idf (Lucene's), so a term in most documents adds little
-rather than subtracting.  Terms are lowercase alphanumeric runs; there is
-no stemming.
-
-`search_tool(retriever, docs)` turns any retriever into the agent loop's
-`search` tool, and `RetrieverBackend` runs a retriever through the runner
-(cache, resume, rows), so evaluation/retrieval.py can score it like any
-other model.
 """
 
 from __future__ import annotations

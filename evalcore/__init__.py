@@ -22,7 +22,8 @@ The package in three layers, each importable on its own:
     agent, tools multi-turn tool use; hooks: forward hooks done safely
     embed        embedders (function, HF, OpenAI / Gemini), the vector cache
     search       BM25, exact and FAISS indexes, dense retrieval, reranking,
-                 the search tool, retrievers as backends
+                 sampled (Plackett-Luce) retrieval, the search tool,
+                 retrievers as backends
   tasks/       what is asked and how it is scored
     base, formats, graders   Task, the canonical task format, graders
     arithmetic, log_qa, search_qa   built-in generated tasks
