@@ -13,8 +13,8 @@ A `Retriever` maps queries to ranked (doc id, score) lists and has an
 and one control, for evaluating a reader that consumes retrieval:
 
     GoldControl      the base ranking with each query's gold documents
-                     forced in ("oracle") or taken out ("removed"), at the
-                     same k
+                     forced in ("oracle"), taken out ("removed"), or left
+                     alone ("none", the matched base arm), at the same k
 
 A `ScoredRetriever` also gives `score_all`: every document's score, not
 only the top k.  BM25 and a DenseRetriever over an ExactIndex do; an
@@ -93,24 +93,28 @@ reproducible within a numpy version but not promised across versions.
 Controls.  Let pi be the base's full ranking of the corpus by (score desc,
 id asc), G the query's gold set, and |G| <= k.  Then
 
+    none(q)    = pi, first k
     oracle(q)  = [G in pi order] + [pi minus G], first k
     removed(q) = [pi minus G], first k .
 
-Both return k documents (removed returns n - |G| if that is fewer), so a
-reader's accuracy differs between them and the base only through whether
-gold is present, not through how much context it reads.  oracle - base measures
-what better retrieval could still buy; base - removed measures how much
-of the score depends on the gold text at all, and accuracy under removed
-is what the reader answers without it (parametric memory, or
-contamination).  pi is the FULL ranking, from `score_all`, so fillers can
-be documents BM25.retrieve itself would drop (sharing no term with the
-query).  A dense base returns k documents itself, so it and the controls
-match in length.  BM25 returns fewer than k for a query that shares terms
-with fewer than k documents, and on those queries the base arm reads less
-context than the controls: a confound in the base-vs-control difference,
-which the `depth` column of score_ranked shows.  The gold set is looked up
-by the query string, so the controls fit a reader whose retrieval query is
-the item's own question, not an agent that writes its own searches.
+All three return k documents (removed returns n - |G| if that is fewer),
+filled by the same rule, so a reader's accuracy differs between them only
+through whether gold is present, not through how much context it reads.
+oracle - none measures what better retrieval could still buy; none -
+removed measures how much of the score depends on the gold text at all,
+and accuracy under removed is what the reader answers without it
+(parametric memory, or contamination).
+
+"none" is the base arm to compare the controls against, rather than the
+base retriever itself.  pi is the FULL ranking, from `score_all`, so a
+filler can be a document BM25.retrieve would drop (sharing no term with
+the query).  For a query that shares terms with fewer than k documents,
+BM25 alone returns fewer than k, and comparing it with the controls would
+mix the gold effect with a difference in context length.  For a dense base
+over an exact index, none(q) is exactly base.retrieve(q, k).  The gold set
+is looked up by the query string, so the controls fit a reader whose
+retrieval query is the item's own question, not an agent that writes its
+own searches.
 """
 
 from __future__ import annotations
@@ -654,17 +658,19 @@ def _ranks(order: np.ndarray) -> np.ndarray:
 
 # --- controls -----------------------------------------------------------------------
 
-_CONTROL_MODES = ("oracle", "removed")
+_CONTROL_MODES = ("none", "oracle", "removed")
 
 
 class GoldControl:
     """A control arm for a reader that consumes retrieval: the base
-    ranking with the query's gold documents forced in ("oracle") or taken
-    out ("removed"), at the same k (definitions in the module docstring).
+    ranking with the query's gold documents forced in ("oracle"), taken
+    out ("removed"), or left alone ("none", the arm to compare those two
+    against), at the same k (definitions in the module docstring).
 
     `gold` maps each query, as the retriever receives it, to its gold doc
     ids; `gold_by_query` builds it from items.  A query not in it is
-    refused, never answered from the base alone."""
+    refused, never answered from the base alone, in every mode, so the
+    three arms run on the same queries."""
 
     def __init__(self, base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
                  mode: str) -> None:
@@ -706,8 +712,12 @@ class GoldControl:
                                  f"in k = {k}")
             order = _top(s[None, :], n)[0][0]      # score desc, id asc
             rest = [j for j in order if j not in g]
-            pick = ([j for j in order if j in g] + rest if self.mode == "oracle"
-                    else rest)[:k]
+            if self.mode == "none":
+                pick = list(order[:k])
+            elif self.mode == "oracle":
+                pick = ([j for j in order if j in g] + rest)[:k]
+            else:
+                pick = rest[:k]
             out.append([(ids[j], float(s[j])) for j in pick])
         return out
 

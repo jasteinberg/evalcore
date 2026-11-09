@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import io
 
+import numpy as np
 import pytest
 from support.retrievers import Fixed
 
 from evalcore import Item, grid
+from evalcore.core.embed import FunctionEmbedder
 from evalcore.core.search import (
     BM25,
+    DenseRetriever,
     GoldControl,
     RetrieverBackend,
     gold_by_query,
@@ -55,10 +58,38 @@ def test_bm25_controls_fill_with_documents_bm25_would_drop():
     assert [d for d, _ in removed.retrieve(["cat"], 3)[0]] == ["d2", "d3", "d4"]
 
 
+def test_none_is_the_full_ranking_cut_at_k():
+    """pi = d, c, b, a, whatever the gold."""
+    r = GoldControl(Fixed(SCORES), {"q": ["a"]}, "none")
+    assert r.retrieve(["q"], k=3) == [[("d", 2.0), ("c", 1.0), ("b", 0.5)]]
+
+
+def test_three_arms_share_the_filler_on_bm25():
+    """"cat", G = {d3}: pi = d1, d2, d3, d4.  none takes pi; oracle puts d3
+    first; removed skips d3.  All read 3 documents; BM25 alone reads 1."""
+    bm, gold = BM25(_DOCS), {"cat": ["d3"]}
+    ids = {m: [d for d, _ in GoldControl(bm, gold, m).retrieve(["cat"], 3)[0]]
+           for m in ("none", "oracle", "removed")}
+    assert ids == {"none": ["d1", "d2", "d3"], "oracle": ["d3", "d1", "d2"],
+                   "removed": ["d1", "d2", "d4"]}
+    assert len(bm.retrieve(["cat"], 3)[0]) == 1
+
+
+def test_none_over_dense_exact_is_dense_retrieve():
+    vocab = ["cat", "dog", "bird", "fish", "sat", "mat"]
+    emb = FunctionEmbedder(lambda texts, role: np.array(
+        [[t.split().count(v) for v in vocab] for t in texts], float),
+        {"model": "counts"})
+    dense = DenseRetriever(_DOCS, emb)
+    qs = ["dog mat", "fish", "cat sat"]
+    r = GoldControl(dense, {q: ["d1"] for q in qs}, "none")
+    assert r.retrieve(qs, 3) == dense.retrieve(qs, 3)
+
+
 def test_scores_are_the_base_scores():
     bm = BM25(_DOCS)
     want = dict(zip(bm.ids, bm.scores("cat"), strict=True))
-    for mode in ("oracle", "removed"):
+    for mode in ("none", "oracle", "removed"):
         for d, s in GoldControl(bm, {"cat": ["d3"]}, mode).retrieve(["cat"], 3)[0]:
             assert s == want[d]
 
@@ -73,8 +104,9 @@ def test_refusals():
     with pytest.raises(ValueError, match="mode"):
         GoldControl(base, {"q": ["a"]}, "both")
     r = GoldControl(base, {"q": ["a", "b", "c"]}, "oracle")
-    with pytest.raises(KeyError, match="no gold entry"):
-        r.retrieve(["other"], 3)
+    for mode in ("none", "oracle", "removed"):
+        with pytest.raises(KeyError, match="no gold entry"):
+            GoldControl(base, {"q": ["a"]}, mode).retrieve(["other"], 3)
     with pytest.raises(ValueError, match="do not fit"):
         r.retrieve(["q"], 2)
     with pytest.raises(ValueError, match="k must"):
@@ -89,9 +121,10 @@ def test_identity_covers_mode_and_gold_but_not_gold_order():
     assert ident == GoldControl(base, {"q": ["c", "a"]}, "oracle").identity()
     assert ident["base"] == base.identity()
     others = [GoldControl(base, {"q": ["a", "c"]}, "removed"),
+              GoldControl(base, {"q": ["a", "c"]}, "none"),
               GoldControl(base, {"q": ["a"]}, "oracle"),
               GoldControl(base, {"p": ["a", "c"]}, "oracle")]
-    assert len({digest(ident)} | {digest(o.identity()) for o in others}) == 4
+    assert len({digest(ident)} | {digest(o.identity()) for o in others}) == 5
     tool = search_tool(GoldControl(BM25(_DOCS), {"cat": ["d1"]}, "oracle"), _DOCS)
     assert tool.version.startswith("gold-oracle-")
 
@@ -110,11 +143,12 @@ def test_gold_by_query_reads_the_last_user_message():
         gold_by_query([*items, _item(3, "q1", ["a"])])
 
 
-@pytest.mark.parametrize(("mode", "recall"), [("oracle", 1.0), ("removed", 0.0)])
+@pytest.mark.parametrize(("mode", "recall"), [("oracle", 1.0), ("removed", 0.0),
+                                             ("none", None)])
 def test_controls_through_the_runner(tmp_path, mode, recall):
     """Every search_qa question has at most 2 gold documents, so at k = 3 the
-    oracle holds all of them (recall@3 = 1) and removed none (= 0), and
-    both read exactly 3 documents."""
+    oracle holds all of them (recall@3 = 1) and removed none (= 0).  All
+    three arms read exactly 3 documents; none's recall depends on BM25."""
     world = make_world(6, 0)
     items = search_qa_items(world, 0)
     assert max(len(it.payload["gold_docs"]) for it in items) <= 2
@@ -124,5 +158,6 @@ def test_controls_through_the_runner(tmp_path, mode, recall):
                   tmp_path / "r.jsonl", workers=1, batch_size=8,
                   stream=io.StringIO())
     assert (df["status"] == "ok").all() and len(df) == len(items)
-    assert df["recall@3"].tolist() == [recall] * len(items)
+    if recall is not None:
+        assert df["recall@3"].tolist() == [recall] * len(items)
     assert df["depth"].tolist() == [3] * len(items)
