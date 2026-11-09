@@ -10,6 +10,12 @@ A `Retriever` maps queries to ranked (doc id, score) lists and has an
     SampledRetriever a random k-subset drawn from a base retriever's scores
                      (opt-in; the three above are deterministic)
 
+and one control, for evaluating a reader that consumes retrieval:
+
+    GoldControl      the base ranking with each query's gold documents
+                     forced in ("oracle") or taken out ("removed"), at the
+                     same k
+
 A `ScoredRetriever` also gives `score_all`: every document's score, not
 only the top k.  BM25 and a DenseRetriever over an ExactIndex do; an
 approximate index cannot, and refuses.
@@ -83,6 +89,28 @@ RetrieverBackend passes it on (a Reranker forwards it to its first stage).
 agent's searches for one query are the same draw in every repeat of the
 unit.  The noise comes from numpy's Generator, so it is bitwise
 reproducible within a numpy version but not promised across versions.
+
+Controls.  Let pi be the base's full ranking of the corpus by (score desc,
+id asc), G the query's gold set, and |G| <= k.  Then
+
+    oracle(q)  = [G in pi order] + [pi minus G], first k
+    removed(q) = [pi minus G], first k .
+
+Both return k documents (removed returns n - |G| if that is fewer), so a
+reader's accuracy differs between them and the base only through whether
+gold is present, not through how much context it reads.  oracle - base measures
+what better retrieval could still buy; base - removed measures how much
+of the score depends on the gold text at all, and accuracy under removed
+is what the reader answers without it (parametric memory, or
+contamination).  pi is the FULL ranking, from `score_all`, so fillers can
+be documents BM25.retrieve itself would drop (sharing no term with the
+query).  A dense base returns k documents itself, so it and the controls
+match in length.  BM25 returns fewer than k for a query that shares terms
+with fewer than k documents, and on those queries the base arm reads less
+context than the controls: a confound in the base-vs-control difference,
+which the `depth` column of score_ranked shows.  The gold set is looked up
+by the query string, so the controls fit a reader whose retrieval query is
+the item's own question, not an agent that writes its own searches.
 """
 
 from __future__ import annotations
@@ -106,11 +134,29 @@ from .embed import Embedder, EmbeddingCache, _checkpoint, _on_device
 from .spec import digest
 from .tools import Tool, ToolInputError
 
-__all__ = ["BM25", "CorpusSearch", "DenseRetriever", "ExactIndex", "FaissIndex",
-           "FunctionScorer", "HFCrossEncoder", "Hit", "Index", "PairScorer",
-           "Reranker", "Retriever", "RetrieverBackend", "SampledDraw",
-           "SampledRetriever", "ScoredRetriever", "ann_recall", "omp_clash",
-           "search_tool"]
+__all__ = [
+    "BM25",
+    "CorpusSearch",
+    "DenseRetriever",
+    "ExactIndex",
+    "FaissIndex",
+    "FunctionScorer",
+    "GoldControl",
+    "HFCrossEncoder",
+    "Hit",
+    "Index",
+    "PairScorer",
+    "Reranker",
+    "Retriever",
+    "RetrieverBackend",
+    "SampledDraw",
+    "SampledRetriever",
+    "ScoredRetriever",
+    "ann_recall",
+    "gold_by_query",
+    "omp_clash",
+    "search_tool",
+]
 
 Hit = tuple[str, float]
 _WORD = re.compile(r"[a-z0-9]+")
@@ -604,6 +650,85 @@ def _ranks(order: np.ndarray) -> np.ndarray:
     rank = np.empty(len(order), np.int64)
     rank[order] = np.arange(len(order))
     return rank
+
+
+# --- controls -----------------------------------------------------------------------
+
+_CONTROL_MODES = ("oracle", "removed")
+
+
+class GoldControl:
+    """A control arm for a reader that consumes retrieval: the base
+    ranking with the query's gold documents forced in ("oracle") or taken
+    out ("removed"), at the same k (definitions in the module docstring).
+
+    `gold` maps each query, as the retriever receives it, to its gold doc
+    ids; `gold_by_query` builds it from items.  A query not in it is
+    refused, never answered from the base alone."""
+
+    def __init__(self, base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
+                 mode: str) -> None:
+        if mode not in _CONTROL_MODES:
+            raise ValueError(f"mode must be one of {_CONTROL_MODES}, got {mode!r}")
+        self.base, self.mode = base, mode
+        self.gold: dict[str, list[str]] = {q: sorted(set(g))
+                                           for q, g in gold.items()}
+        self._identity = {"retriever": f"gold-{mode}", "base": base.identity(),
+                          "gold": digest(self.gold)}
+
+    def identity(self) -> dict[str, Any]:
+        return self._identity
+
+    def retrieve(self, queries: Sequence[str], k: int,
+                 repeat: int = 0) -> list[list[Hit]]:
+        """`repeat` is ignored: the control is deterministic."""
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        queries = list(queries)
+        missing = [q for q in queries if q not in self.gold]
+        if missing:
+            raise KeyError(f"{len(missing)} query(ies) have no gold entry, "
+                           f"e.g. {missing[0]!r}")
+        if not queries:
+            return []
+        ids, S = self.base.score_all(queries)
+        S = np.asarray(S, np.float64)
+        n = len(ids)
+        col = {d: j for j, d in enumerate(ids)}
+        out = []
+        for q, s in zip(queries, S, strict=True):
+            unknown = [d for d in self.gold[q] if d not in col]
+            if unknown:
+                raise ValueError(f"gold ids not in the corpus for {q!r}: {unknown}")
+            g = {col[d] for d in self.gold[q]}
+            if self.mode == "oracle" and len(g) > k:
+                raise ValueError(f"{len(g)} gold documents for {q!r} do not fit "
+                                 f"in k = {k}")
+            order = _top(s[None, :], n)[0][0]      # score desc, id asc
+            rest = [j for j in order if j not in g]
+            pick = ([j for j in order if j in g] + rest if self.mode == "oracle"
+                    else rest)[:k]
+            out.append([(ids[j], float(s[j])) for j in pick])
+        return out
+
+
+def gold_by_query(items: Sequence[Any], gold_field: str = "gold_docs"
+                  ) -> dict[str, list[str]]:
+    """{query: gold ids} from items in the canonical format: the query is
+    the last user message, as RetrieverBackend reads it, and the gold is
+    `payload[gold_field]` (a list of ids, or {id: gain}).  Two items with
+    the same query and different gold are refused."""
+    out: dict[str, list[str]] = {}
+    for it in items:
+        users = [m for m in it.payload["messages"] if m.get("role") == "user"]
+        if not users:
+            raise ValueError(f"item {it.item_id} has no user message")
+        q, g = users[-1]["content"], sorted(set(it.payload[gold_field]))
+        if q in out and out[q] != g:
+            raise ValueError(f"query {q!r} has two different gold sets: "
+                             f"{out[q]} and {g}")
+        out[q] = g
+    return out
 
 
 # --- as a tool, and as a backend ------------------------------------------------------
