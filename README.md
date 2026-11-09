@@ -168,7 +168,7 @@ locally.
 | `agent.py`, `tools.py` | `AgentBackend` (the multi-turn tool loop), `Tool` |
 | `hooks.py` | `hooked`: forward hooks that must match, are counted, and are always removed |
 | `embed.py` | `Embedder` (function, HF, OpenAI, Gemini) and the per-text vector cache |
-| `search.py` | `BM25`, `ExactIndex`, `FaissIndex`, `DenseRetriever`, `Reranker`, `CorpusSearch`, `RetrieverBackend` |
+| `search.py` | `BM25`, `ExactIndex`, `FaissIndex`, `DenseRetriever`, `Reranker`, `SampledRetriever`, `GoldControl`, `CorpusSearch`, `RetrieverBackend` |
 
 **`tasks/`: what is asked and how it is scored**
 
@@ -217,7 +217,7 @@ small interface at each point and checks it.
 | a tool | `Tool(name, description, parameters, fn)` | `ToolInputError` goes back to the model; `ToolUnavailable` ends the episode as `tool_error` |
 | embeddings | `Embedder.identity` and `_embed` | the vector cache comes with it |
 | a vector index | `Index.identity`, `build`, `search` | set `exact = False` and the recall cost is measured |
-| a retriever | `identity` and `retrieve(queries, k)` | runs through the harness via `RetrieverBackend` |
+| a retriever | `identity` and `retrieve(queries, k, repeat=0)` | runs through the harness via `RetrieverBackend`, which passes each unit's repeat index. A deterministic retriever ignores it |
 | a reranker | `PairScorer.identity` and `score(query, docs)` | wrap in `Reranker(first, scorer, docs, depth)` |
 | a pipeline stage | a function `(exp, res) -> None` | pass it as `Experiment(..., report=my_stage)` |
 | an analysis | a function `(frame, ctx) -> DataFrame` (or a dict of them) | `ctx.by` is the grid axes; pass it in `analyses` |
