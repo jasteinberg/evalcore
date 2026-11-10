@@ -16,7 +16,7 @@ class Cache:
     runs, dry runs, or crashes -- which is what makes a long unattended sweep
     survivable -- and a different call is never served this one's answer.
     It holds responses only, never scores, so a metric change is a re-score.
-    Delete the directory to force a refresh; never mutate it."""
+    Delete the directory to force a refresh.  Never mutate it."""
 
     def __init__(self, root: str | Path, enabled: bool = True) -> None:
         self.root = Path(root)
@@ -53,6 +53,6 @@ class Cache:
             return
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # two workers can hold one key at once; write_atomic says why that
+        # two workers can hold one key at once, and write_atomic says why that
         # needs a unique temp
         write_atomic(p, lambda tmp: tmp.write_text(json.dumps(payload)))

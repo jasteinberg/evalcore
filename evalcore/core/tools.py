@@ -1,8 +1,8 @@
 """Tools a model can call, in a provider-neutral form.
 
 A tool is a name, a description, a JSON-schema for its arguments, and a
-function from arguments to text.  Providers spell tool calls differently;
-the adapters translate, and everything above them sees only:
+function from arguments to text.  Providers spell tool calls differently,
+so the adapters translate, and everything above them sees only:
 
     request:   Request.tools = [tool.spec(), ...]
     response:  meta["tool_calls"] = [{"id", "name", "arguments"}, ...]
@@ -13,8 +13,8 @@ things in a results table:
 
     ToolInputError    the MODEL asked for something invalid (bad or missing
                       arguments, an unknown tool).  The message goes back to
-                      the model as the tool's output; recovering is part of
-                      the behaviour being measured.
+                      the model as the tool's output, and recovering is
+                      part of the behaviour being measured.
     ToolUnavailable   the TOOL's infrastructure failed (a search API is
                       down, rate-limited).  The episode ends with status
                       `tool_error`: neither a model failure nor gradable.
@@ -43,11 +43,11 @@ __all__ = ["Tool", "ToolContext", "ToolInputError", "ToolUnavailable"]
 
 
 class ToolInputError(ValueError):
-    """The model's call was invalid; the message is returned to the model."""
+    """The model's call was invalid, and the message is returned to it."""
 
 
 class ToolUnavailable(RuntimeError):
-    """The tool's infrastructure failed; the episode is a `tool_error`."""
+    """The tool's infrastructure failed, so the episode is a `tool_error`."""
 
 
 @dataclass(frozen=True)

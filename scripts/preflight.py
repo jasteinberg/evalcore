@@ -7,11 +7,11 @@ so a pass here means the harness's own request path works, not a
 hand-written copy of it.  It reports:
 
 * whether auth, the request shape and the response parse work.  A 4xx
-  usually names the offending field;
+  usually names the offending field.
 * the reply, the token accounting and the stop reason, including whether
-  the truncation flag fires at your `--max-tokens`;
-* round-trip latency, median and max over the n calls;
-* the rate-limit headers exactly as the server sent them;
+  the truncation flag fires at your `--max-tokens`.
+* round-trip latency, median and max over the n calls.
+* the rate-limit headers exactly as the server sent them.
 * the wall-clock arithmetic for `--units` requests at several worker counts.
 
 Wall-clock time for U units at W workers and per-call latency L is U L / W,
@@ -119,7 +119,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--base-url", help="override the provider's base URL "
                     "(a proxy or a compatible server)")
     ap.add_argument("--prompt-file", type=Path,
-                    help="a representative prompt; default is a one-word "
+                    help="a representative prompt. The default is a one-word "
                          "liveness probe")
     ap.add_argument("--max-tokens", type=int, default=8,
                     help="use the sweep's real budget for a latency estimate "

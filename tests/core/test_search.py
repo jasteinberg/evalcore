@@ -44,7 +44,7 @@ DOCS = {"d1": "the cat sat", "d2": "the dog sat on the dog mat",
 
 def test_bm25_by_hand():
     """N = 3, lengths 3, 7, 2, avgdl = 4.  "dog": n = 1, f = 2 in d2,
-    idf = ln(1 + 2.5/1.5); norm(d2) = k1 (1 - b + b 7/4).
+    idf = ln(1 + 2.5/1.5), norm(d2) = k1 (1 - b + b 7/4).
     score = idf * 2 (k1 + 1) / (2 + norm)."""
     k1, b = 1.2, 0.75
     s = BM25(DOCS, k1, b).scores("dog")
@@ -206,8 +206,8 @@ def test_search_tool_formats_hits_and_versions_by_retriever():
 def test_a_retriever_runs_and_scores_through_the_runner(tmp_path):
     """A one-hop question names its town, and at most three documents
     contain that name (the town's, the river rising there, the person born
-    there; the near-name twin is another token), each scoring far above any
-    document without it.  So recall@3 = 1 on every question.  recall@1 is
+    there, but the near-name twin is another token), each scoring far above
+    any document without it.  So recall@3 = 1 on every question.  recall@1 is
     not: BM25's length normalisation ranks the shorter river and person
     documents above the town's (seen on the first run of this test)."""
     world = make_world(10, 0)

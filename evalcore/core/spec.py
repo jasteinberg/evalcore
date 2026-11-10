@@ -56,7 +56,7 @@ def digest(obj: Any, n: int = 16) -> str:
 @dataclass(frozen=True)
 class Cell:
     """One configuration.  `params` carries everything that can change the
-    model's behaviour; `tags` carries labels that must NOT affect identity
+    model's behaviour, and `tags` carries labels that must NOT affect identity
     (a human-readable condition name, a note).  Keeping tags out of the digest is
     what lets you rename a condition without invalidating the cache."""
 
@@ -82,8 +82,8 @@ def grid(axes: Mapping[str, Sequence[Any]],
          exclude: Iterable[Mapping[str, Any]] = (),
          tags: Mapping[str, Any] | None = None) -> list[Cell]:
     """Cartesian product of `axes`, minus any cell matching an `exclude`
-    pattern (a partial dict; a cell is dropped if it matches on every key
-    the pattern names).  A pattern naming a key that is not an axis is
+    pattern (a partial dict, and a cell is dropped if it matches on every
+    key the pattern names).  A pattern naming a key that is not an axis is
     refused.
 
     >>> len(grid({"model": ["a", "b"], "temp": [0.0, 1.0]}))
@@ -121,7 +121,7 @@ class Item:
     item_id: str
     payload: Mapping[str, Any]
     group: str | None = None          # optional stratum (subject, difficulty)
-    parent_id: str | None = None      # set on augmentations; None if original
+    parent_id: str | None = None      # set on augmentations, None if original
 
     @property
     def cluster(self) -> str:

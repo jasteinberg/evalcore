@@ -129,7 +129,7 @@ def test_hf_prefixes_and_commit_are_in_the_identity():
 
 def test_hf_identity_covers_the_dtype():
     """B26.  The same weights in float32 and in bfloat16 give different
-    vectors (bfloat16 keeps 8 mantissa bits; the premise is asserted), so
+    vectors (bfloat16 keeps 8 mantissa bits, and the premise is asserted), so
     the two embedders must have different identities -- else they share
     cache entries."""
     torch, MeanEncoder, EmbedTok = toy_hf()

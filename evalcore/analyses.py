@@ -6,14 +6,14 @@ An analysis is any function
 
 where `frame` holds every row of the run (all statuses) and `ctx` says the
 grid axes, the manifest and the sink.  An Experiment takes a mapping
-{name: analysis}; each table is written to `<sink>.analysis/<name>.csv`
+{name: analysis}, and each table is written to `<sink>.analysis/<name>.csv`
 (a dict result to `<name>.<key>.csv`).  The factories below build the
-usual ones; write your own for anything else, or pass `None` for the
+usual ones.  Write your own for anything else, or pass `None` for the
 analyse stage to skip it.
 
 Only `ok` rows carry scores.  A summary is still handed every row, so
 that the rows lost before scoring (error, truncated, unparsed) are counted
-in its `n_excluded` and trip the excluded-rows caveat; handing it the ok
+in its `n_excluded` and trip the excluded-rows caveat.  Handing it the ok
 rows alone would make a cell that lost a third of its rows look whole.
 `attrition` says which state each lost row is in.
 """
@@ -53,7 +53,7 @@ def _require_status(frame: pd.DataFrame) -> None:
     say which rows those are, so it is refused rather than used whole."""
     if "status" not in frame:
         raise KeyError("frame has no 'status' column, so its ok rows are "
-                       "unknown; pass the runner's frame (to_frame / execute)")
+                       "unknown. Pass the runner's frame (to_frame / execute)")
 
 
 def attrition_table() -> Analysis:
@@ -65,12 +65,12 @@ def attrition_table() -> Analysis:
 
 def summary(metric: str, by: Sequence[str] | None = None,
             **summarize_kw: Any) -> Analysis:
-    """The cluster-bootstrap summary of `metric` per cell (stats.summarize;
-    keyword arguments pass through: n_boot, method, label, floor, ...)."""
+    """The cluster-bootstrap summary of `metric` per cell (stats.summarize).
+    Keyword arguments pass through: n_boot, method, label, floor, ...)."""
     def run(frame: pd.DataFrame, ctx: AnalysisContext) -> Tables:
         if metric not in frame:
-            raise KeyError(f"summary: no column {metric!r} in the results; "
-                           f"columns are {sorted(map(str, frame.columns))}")
+            raise KeyError(f"summary: no column {metric!r} in the results. "
+                           f"Its columns are {sorted(map(str, frame.columns))}")
         return summarize(frame, metric, list(by or ctx.by), **summarize_kw)
     return run
 

@@ -17,7 +17,7 @@ Outcomes, and the row status each becomes:
     ToolUnavailable from a tool          tool_error (infrastructure)
     other exception inside a tool        error (a tool bug)
     ToolInputError / unknown tool name   returned to the model as the
-                                         tool's output; counted in
+                                         tool's output, counted in
                                          meta["tool_input_errors"]
 
 Tool results can be cached content-addressed on (tool identity,
@@ -73,7 +73,7 @@ class AgentBackend(Backend):
         if not self.uses_context:
             return None
         if req.item_id is None:
-            raise ValueError(f"context tools need Request.item_id; unit "
+            raise ValueError(f"context tools need Request.item_id, and unit "
                              f"{req.unit_id} has none")
         return ToolContext(req.unit_id, req.item_id, req.repeat)
 

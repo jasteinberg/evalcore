@@ -30,7 +30,7 @@ SCORES = {"a": 0.0, "b": 0.5, "c": 1.0, "d": 2.0}
 
 
 def test_oracle_puts_gold_first_in_base_order_then_fills_to_k():
-    """G = {a, c}: gold in pi order is c, a; pi minus G is d, b."""
+    """G = {a, c}: gold in pi order is c, a.  pi minus G is d, b."""
     r = GoldControl(Fixed(SCORES), {"q": ["a", "c"]}, "oracle")
     assert r.retrieve(["q"], k=3) == [[("c", 1.0), ("a", 0.0), ("d", 2.0)]]
     assert r.retrieve(["q"], k=2) == [[("c", 1.0), ("a", 0.0)]]
@@ -49,7 +49,7 @@ _DOCS = {"d1": "the cat sat", "d2": "the dog sat on the dog mat",
 
 def test_bm25_controls_fill_with_documents_bm25_would_drop():
     """"cat" matches d1 only, so pi = d1, then d2, d3, d4 (all 0, by id).
-    BM25 itself returns one document; the controls return k = 3."""
+    BM25 itself returns one document, but the controls return k = 3."""
     bm = BM25(_DOCS)
     assert [d for d, _ in bm.retrieve(["cat"], 3)[0]] == ["d1"]
     oracle = GoldControl(bm, {"cat": ["d3"]}, "oracle")
@@ -65,8 +65,9 @@ def test_none_is_the_full_ranking_cut_at_k():
 
 
 def test_three_arms_share_the_filler_on_bm25():
-    """"cat", G = {d3}: pi = d1, d2, d3, d4.  none takes pi; oracle puts d3
-    first; removed skips d3.  All read 3 documents; BM25 alone reads 1."""
+    """"cat", G = {d3}: pi = d1, d2, d3, d4.  none takes pi, oracle puts d3
+    first and removed skips d3.  All read 3 documents, but BM25 alone
+    reads 1."""
     bm, gold = BM25(_DOCS), {"cat": ["d3"]}
     ids = {m: [d for d, _ in GoldControl(bm, gold, m).retrieve(["cat"], 3)[0]]
            for m in ("none", "oracle", "removed")}
@@ -148,7 +149,8 @@ def test_gold_by_query_reads_the_last_user_message():
 def test_controls_through_the_runner(tmp_path, mode, recall):
     """Every search_qa question has at most 2 gold documents, so at k = 3 the
     oracle holds all of them (recall@3 = 1) and removed none (= 0).  All
-    three conditions read exactly 3 documents; none's recall depends on BM25."""
+    three conditions read exactly 3 documents, and none's recall depends on
+    BM25."""
     world = make_world(6, 0)
     items = search_qa_items(world, 0)
     assert max(len(it.payload["gold_docs"]) for it in items) <= 2

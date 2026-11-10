@@ -127,7 +127,7 @@ class IgnoreKeepLM(ToyLM):
 class Recorder(torch.nn.Module):
     """Records the input_ids of every forward and generate call.  generate()
     returns its input followed by the hand-written rows in `new` (one row
-    per prompt; default all id 1), so the generated ids are known without
+    per prompt, all id 1 by default), so the generated ids are known without
     running a model."""
 
     def __init__(self, vocab: int, new: list[list[int]] | None = None):
@@ -161,13 +161,13 @@ def tiny_qwen(vocab: int, n_layers: int, width: int) -> torch.nn.Module:
 
 
 def user(uid: str, text: str, params: dict | None = None, **kw) -> Request:
-    """A one-message chat request; `kw` are Request fields (target,
+    """A one-message chat request.  `kw` are Request fields (target,
     candidates, ...)."""
     return Request(uid, [{"role": "user", "content": text}], params or {}, **kw)
 
 
 class EmbedTok:
-    """For HFEmbedder: characters as tokens; pads on `side`, returns torch
+    """For HFEmbedder: characters as tokens, pads on `side`, returns torch
     tensors."""
 
     def __init__(self, side="right"):

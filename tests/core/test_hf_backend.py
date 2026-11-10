@@ -5,7 +5,7 @@ Expected values never come from running the code under test: they are
 hand-written token ids and kwargs, a direct `model.generate` call on one
 unpadded prompt, or an invariance (two configurations that change outputs
 must have two identities).  Models are random-init and tiny (a 2-layer
-Qwen2 of width 32, the mean-pool toy LM); nothing is downloaded.
+Qwen2 of width 32, the mean-pool toy LM).  Nothing is downloaded.
 
 Teacher-forced and candidate scoring are in test_hf_scoring.py, prefix
 reuse in test_hf_prefix_cache.py."""
@@ -74,8 +74,8 @@ def test_a24_hf_identity_covers_defaults_generate_and_attentions():
 
 
 def test_two_revisions_of_one_checkpoint_are_different_backends():
-    """from_pretrained(id, revision=r) keeps name_or_path == id for every r;
-    the snapshot loaded is config._commit_hash.  Pythia's training-step axis
+    """from_pretrained(id, revision=r) keeps name_or_path == id for every r.
+    The snapshot loaded is config._commit_hash.  Pythia's training-step axis
     is exactly this case: one cache dir, revisions step1000 ... step143000,
     and each must get its own request keys."""
     from types import SimpleNamespace
@@ -94,7 +94,7 @@ def test_two_revisions_of_one_checkpoint_are_different_backends():
 @pytest.mark.parametrize("path", ["target", "candidates", "forward"])
 def test_decode_params_are_refused_off_the_generate_path(path):
     """A3, A10.  Teacher forcing, candidate scoring and a plain forward
-    (generate=False) each read logits once; a temperature would move the
+    (generate=False) each read logits once.  A temperature would move the
     cell id and the cache key while changing nothing that is computed, so
     a request carrying one must come back as an error naming it.  The same
     request without it must succeed (the fixture works)."""
@@ -179,7 +179,7 @@ def test_a15_left_padded_batch_generation_equals_per_prompt_generate(qwen):
 
 def test_a16_truncated_iff_the_budget_was_hit():
     """A16. Hand-written generated rows, budget 4, pad = eos = 0:
-    four real tokens -> truncated; two real tokens then eos and pad ->
+    four real tokens -> truncated, two real tokens then eos and pad ->
     finished, not truncated."""
     tok = CharTok()
     model = Recorder(len(tok.vocab), new=[[5, 6, 7, 8], [5, 6, 0, 0]])
@@ -207,7 +207,7 @@ def test_a16_a_generation_config_eos_ends_a_generation_too():
     """A16.  generate() also stops on generation_config.eos_token_id (Llama 3
     instruct: <|eot_id|> besides the tokenizer's eos).  Hand-written rows,
     budget 4, extra stop ids "." and ":": a full row ending in ":" is
-    finished; a full row of letters is cut."""
+    finished.  A full row of letters is cut."""
     from types import SimpleNamespace
     tok = CharTok()
     stops = [tok.index["."], tok.index[":"]]

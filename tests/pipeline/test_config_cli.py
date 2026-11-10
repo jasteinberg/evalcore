@@ -14,7 +14,7 @@ from evalcore.config import ConfigError, from_config
 from evalcore.registry import REGISTRIES
 
 pytestmark = pytest.mark.filterwarnings(
-    # plumbing fixtures are deliberately tiny; caveats are tested in test_stats
+    # plumbing fixtures are deliberately tiny. Caveats are tested in test_stats
     "ignore:.*carry caveats:RuntimeWarning")
 
 
@@ -52,7 +52,7 @@ def test_a_file_task_runs_end_to_end_from_config(tmp_path):
     ({"backend": {"type": "echo", "flavor": "x"}},
      "backend: unknown key(s) ['flavor'] for backend 'echo'"),
     ({"backend": {"type": "http"}}, "backend: backend 'http' requires ['flavour']"),
-    ({"task": {"type": "arith"}}, "task: unknown task 'arith'; registered:"),
+    ({"task": {"type": "arith"}}, "task: unknown task 'arith'. Registered:"),
     ({"task": {"path": "x"}}, 'task: give a {"type": ...}'),
     ({"stages": {"calibrate": True}}, "true is the default"),
     ({"analyses": {"s": {"type": "summary"}}},
@@ -186,7 +186,7 @@ def test_a_local_model_task_from_config(tmp_path, toy_lm):
 
 def test_a_label_in_an_hf_grid_is_refused_before_any_call(tmp_path, toy_lm):
     """HF reads no "model" param (the model is loaded), so a grid axis of
-    labels would make cells that differ in id and are the same request; the
+    labels would make cells that differ in id and are the same request.  The
     refusal names the key, at construction, before calibration spends."""
     with pytest.raises(ValueError, match=r"6 of 6 requests.*'model'.*tags"):
         from_config(cfg(tmp_path, task={"type": "arithmetic", "n_items": 6},

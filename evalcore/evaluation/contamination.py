@@ -19,8 +19,8 @@ Neither number means anything alone.  Two samples of the same author, or two
 documents from the same domain, share long runs by coincidence: function words,
 stock phrases, formatting.  The interpretable quantity is the *difference*
 between the candidate and a control -- reference-adjacent text known not to be
-in the reference.  A candidate scoring at or below its control is producing;
-one scoring well above it is retrieving.  `report()` takes the control as a
+in the reference.  A candidate scoring at or below its control is producing,
+and one scoring well above it is retrieving.  `report()` takes the control as a
 first-class argument for that reason.
 
 Works on any sequence: a string (character-level), a list of tokens, a list of
@@ -41,7 +41,7 @@ __all__ = ["grams", "longest_match", "ngram_overlap", "report"]
 def grams(seq: Sequence[Any], n: int) -> list[Hashable]:
     """All contiguous n-grams of `seq`, as hashable objects.
 
-    Strings slice to strings and are already hashable; anything else is
+    Strings slice to strings and are already hashable.  Anything else is
     tupled, so token lists and id lists work unchanged."""
     if n <= 0:
         raise ValueError("n must be positive")
@@ -105,7 +105,7 @@ def report(candidates: Mapping[str, Sequence[Any]],
 
     Read the table by comparing rows, never by reading a row alone.  The
     control row is the overlap you get *without* memorisation, for this
-    reference and this genre; candidates at or below it are producing.
+    reference and this genre, and candidates at or below it are producing.
 
     Omitting `control` is supported and discouraged -- the numbers are then
     uncalibrated, and the missing row is the reason a reviewer cannot tell
@@ -116,7 +116,7 @@ def report(candidates: Mapping[str, Sequence[Any]],
     """
     if "control" in candidates:
         raise ValueError("a candidate is named 'control', which is reserved "
-                         "for the control row; rename it")
+                         "for the control row. Rename it")
     rows: list[dict[str, Any]] = []
     named = dict(candidates)
     if control is not None:

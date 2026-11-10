@@ -18,8 +18,8 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
               manifest: str | Path | pd.DataFrame | None = None
               ) -> pd.DataFrame:
     """Per-cell accounting of the plan.  Report this next to every metric
-    table; a cell whose failures correlate with item difficulty has a biased
-    mean even if the surviving rows are scored perfectly.
+    table, because a cell whose failures correlate with item difficulty has
+    a biased mean even if the surviving rows are scored perfectly.
 
     Without `manifest` this tabulates what came back -- `n_rows`, `n_err`,
     `n_truncated`, `n_unparsed`, `err_rate` -- which is the older and weaker
@@ -45,8 +45,9 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
 
     Every count except `n_rows` is a count of UNITS, and each planned unit is
     assigned its state once, from the plan side: absent from the frame is
-    missing; otherwise the worst status among its rows, ranked
-    error > tool_error > truncated > unparsed > ok.  Counting rows instead
+    missing, and otherwise the state is the worst status among its rows,
+    ranked error > tool_error > truncated > unparsed > ok.  Counting rows
+    instead
     breaks the identity on any frame carrying more than one row per unit --
     a judge panel with three verdicts per response is the case that will
     arrive -- where it reports err_rate = 2.0 and a negative `n_completed`.
@@ -99,7 +100,7 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     absent = [c for c in by if c not in plan.columns]
     if absent:
         raise ValueError(
-            f"manifest has no column(s) {absent}; group attrition by cell "
+            f"manifest has no column(s) {absent}. Group attrition by cell "
             f"params, tags or item identity -- a unit that was never "
             f"attempted has no scored columns to group by.")
 
@@ -112,7 +113,7 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
 
     # State is decided per planned unit, on the plan side, so the five
     # categories partition it by construction whatever the frame's row
-    # multiplicity.  NaN = never seen; otherwise the worst row's rank.
+    # multiplicity.  NaN = never seen, otherwise the worst row's rank.
     state = df.groupby("unit_id", observed=True)["_rank"].max()
     p = plan.assign(_st=plan["unit_id"].map(state))
     p = p.assign(_missing=p["_st"].isna(), _done=p["_st"].eq(0),
@@ -137,7 +138,7 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
         idx = idx.union(s.index)
     out = pd.concat([s.reindex(idx) for s in parts],
                     axis=1).fillna(0).astype(int)
-    # Rates take the plan as denominator wherever there is one; a cell known
+    # Rates take the plan as denominator wherever there is one.  A cell known
     # only to the frame (stale manifest) gets NaN rather than a made-up 0.
     plan_n = out.n_planned.where(out.n_planned > 0)
     att_n = (out.n_planned - out.n_missing).where(

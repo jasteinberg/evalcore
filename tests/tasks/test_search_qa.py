@@ -49,8 +49,8 @@ def test_every_gold_answer_is_rederived_from_the_documents():
 
 
 def hop_follower(req):
-    """Search for the entity the question names; if the hit names the next
-    entity (a town), search for that; then answer from the last result.
+    """Search for the entity the question names.  If the hit names the next
+    entity (a town), search for that, then answer from the last result.
     It never looks at the gold."""
     q = req.messages[1]["content"]
     results = [m["content"] for m in req.messages if m.get("role") == "tool"]

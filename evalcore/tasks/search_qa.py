@@ -23,8 +23,8 @@ efficiency.  Run the
 same items with no tools for the closed-book baseline: accuracy there
 should sit at the floor, and the gap is what tool use buys.
 
-`search_qa(...)` returns the Task and a BM25 CorpusSearch over the corpus;
-wrap a tool-capable backend as `AgentBackend(backend, [search.tool])`.
+`search_qa(...)` returns the Task and a BM25 CorpusSearch over the corpus.
+Wrap a tool-capable backend as `AgentBackend(backend, [search.tool])`.
 Each item also carries `gold_docs`, the documents its answer composes, so
 the same questions score a retriever on its own (core.search's
 RetrieverBackend with evaluation.retrieval.score_ranked).  The person ->
@@ -116,7 +116,7 @@ def make_world(n_towns: int = 20, seed: int = 0) -> World:
 
 
 def search_qa_items(world: World, seed: int = 0) -> list[Item]:
-    """One item per question; gold answers come from the world, so they
+    """One item per question.  Gold answers come from the world, so they
     are exact by construction."""
     rng = random.Random(seed)
     doc = world.doc_of

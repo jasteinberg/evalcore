@@ -1,10 +1,11 @@
 """Golden snapshots of end-to-end outputs.  These catch any change in what
-the harness produces for a fixed input; they do not say the output is right
-(the hand-value tests elsewhere do that).  Regenerate with `make snapshots`.
+the harness produces for a fixed input, but they do not say the output is
+right (the hand-value tests elsewhere do that).  Regenerate with
+`make snapshots`.
 
 Tolerance: rtol 1e-12 on floats.  The same inputs give the same arithmetic
 on every platform except for summation order inside numpy's vectorised
-reductions, which moves a double by a few ulp (~1e-16 relative) per sum;
+reductions, which moves a double by a few ulp (~1e-16 relative) per sum.
 1e-12 leaves four orders of margin and still catches any real change."""
 
 from __future__ import annotations

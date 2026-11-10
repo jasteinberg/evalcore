@@ -17,7 +17,8 @@ spec.loader.exec_module(preflight)
 
 
 def test_wall_clock_arithmetic():
-    # 1200 units x 0.5 s / 8 workers = 75 s; 8 workers / 0.5 s = 960 req/min
+    # 1200 units x 0.5 s / 8 workers = 75 s
+    # 8 workers / 0.5 s = 960 req/min
     minutes, rpm = preflight.wall_clock(1200, 0.5, 8)
     assert minutes == pytest.approx(75 / 60) and rpm == pytest.approx(960)
 

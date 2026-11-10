@@ -16,7 +16,7 @@ from evalcore.tasks.base import Task
 
 
 class Counting:
-    """Correct on even items; counts calls; refuses the items in `fail`.
+    """Correct on even items, counts calls, and refuses the items in `fail`.
     `tag` enters the backend identity, so two tags are two backends."""
 
     def __init__(self, fail: Sequence[int] = (), tag: str = "v1") -> None:
@@ -36,8 +36,8 @@ class Counting:
 
 def items(n: int = 6, gold_shift: int = 0,
           template: str = "what is {i}") -> list[Item]:
-    """Items q0..q{n-1}, numeric grader; `gold_shift` moves the gold without
-    touching the prompt."""
+    """Items q0..q{n-1}, numeric grader.  `gold_shift` moves the gold
+    without touching the prompt."""
     return [Item(f"q{i}", {"messages": [{"role": "user",
                                          "content": template.format(i=i)}],
                            "gold": i + gold_shift, "grader": "numeric"})

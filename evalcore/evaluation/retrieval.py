@@ -1,23 +1,24 @@
 r"""Ranking metrics for retrieval, per query, with cluster-bootstrap intervals.
 
 A query q has a judged relevance g_q(d) >= 0 for each document d (binary:
-g in {0, 1}; the relevant set R_q = {d : g_q(d) > 0}).  A retriever returns
-a ranked list d_1, d_2, ... .  Per query:
+g in {0, 1}, and the relevant set R_q = {d : g_q(d) > 0}).  A retriever
+returns a ranked list d_1, d_2, ... .  Per query:
 
     recall@k = |R_q n {d_1..d_k}| / |R_q|
     hit@k    = 1[R_q n {d_1..d_k} != {}]
     RR       = 1 / (rank of the first relevant document), 0 if none is
-               returned -- so MRR depends on how deep the list goes; it is
+               returned -- so MRR depends on how deep the list goes.  It is
                MRR at the returned depth, and rows must share that depth to
                be compared.
     nDCG@k   = DCG@k / IDCG@k,  DCG@k = sum_{i <= k} g(d_i) / log2(i + 1),
 
 with IDCG@k the DCG@k of the ideal order (judged gains sorted descending),
 so nDCG@k = 1 exactly when the top k are the best k available.  The gain is
-linear in g; for binary judgments that is the same as the 2^g - 1 form.
+linear in g, and for binary judgments that is the same as the 2^g - 1
+form.
 
 recall@k cannot reach 1 when |R_q| > k (a two-hop question with both
-documents relevant has recall@1 <= 1/2); hit@k can.  Report the one that
+documents relevant has recall@1 <= 1/2), but hit@k can.  Report the one that
 asks the question you mean.
 
 Every metric is a mean over queries, and queries derived from one source
@@ -101,7 +102,7 @@ def retrieval_summary(df: pd.DataFrame, by: Sequence[str],
                    if c == "rr" or c.split("@")[0] in ("recall", "hit", "ndcg")]
     if ("rr" in metrics and "depth" in df.columns and len(df)
             and df.groupby(list(by))["depth"].nunique().max() > 1):
-        raise ValueError("rows of one cell retrieved to different depths; "
+        raise ValueError("rows of one cell retrieved to different depths. "
                          "RR (and so MRR) is only comparable at one depth")
     return pd.concat([summarize(df, m, by, **kw).assign(metric=m)
                       for m in metrics], ignore_index=True)

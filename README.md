@@ -69,12 +69,12 @@ statuses and statistics, is the same for all of them.
 | experiment | the request carries | backend | the row gets (`meta_*`) | analyse with |
 |---|---|---|---|---|
 | graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts, `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two conditions |
-| teacher-forced scoring | `target`: the continuation to score | `HFBackend` | per target token `logp`, `argmax_ok`; `sum_logp`, `em_tf` | `tasks.graders.score_teacher_forced`; `axis_curves` along a model axis |
-| candidate scoring | `candidates`: token ids, prompt as text or `input_ids` | `HFBackend` | `cand_logp` over the full vocabulary, `cand_mass`, `leakage`, `top1_id` | your own `score`; `value_curves` along a swept setting |
-| activation capture | any of the above | `HFBackend(probe=...)` | what the probe's `collect` returns; arrays go to an `.npz` sidecar named in `meta_arrays` | `load_arrays` |
+| teacher-forced scoring | `target`: the continuation to score | `HFBackend` | per target token `logp` and `argmax_ok`, plus `sum_logp` and `em_tf` | `tasks.graders.score_teacher_forced`, `axis_curves` along a model axis |
+| candidate scoring | `candidates`: token ids, prompt as text or `input_ids` | `HFBackend` | `cand_logp` over the full vocabulary, `cand_mass`, `leakage`, `top1_id` | your own `score`, `value_curves` along a swept setting |
+| activation capture | any of the above | `HFBackend(probe=...)` | what the probe's `collect` returns. Arrays go to an `.npz` sidecar named in `meta_arrays` | `load_arrays` |
 | interventions (patching, steering) | any of the above | `HFBackend(probe=...)` whose hook returns a replacement output | as above | one backend per setting: the probe's identity names it |
 | many prompts sharing a prefix | any `HFBackend` request | `HFBackend(prefix_cache=True, prefix_slots=K)` | `n_prefix_reused`, `prefix_slot` | outputs equal to a full forward, within float tolerance |
-| tool use | `messages`; the tools come from the backend | `AgentBackend(inner, tools)` | `trajectory`, `turns`, `n_tool_calls`, `tool_input_errors`, `truncated_by` | `attrition`: `tool_error` and `truncated` are their own states |
+| tool use | `messages`. The tools come from the backend | `AgentBackend(inner, tools)` | `trajectory`, `turns`, `n_tool_calls`, `tool_input_errors`, `truncated_by` | `attrition`: `tool_error` and `truncated` are their own states |
 | retrieval | items with `gold_docs` | `RetrieverBackend` over `BM25`, `DenseRetriever`, `Reranker` | the ranked document ids | `score_ranked`, `retrieval_summary` |
 
 Across all of them:
@@ -131,8 +131,8 @@ off with `None`:
 
 | stage | what it does |
 |---|---|
-| `calibrate` | a few real calls on the experiment's own requests; latency, tokens, rate-limit headers, or the throughput of each batch size for a local model; derives workers and batch size and lists every assumption |
-| `dry_run` | the resume decisions and the estimated spend without calling anything; halts above `max_cost`, or when calibration measured no token counts to estimate the spend from |
+| `calibrate` | a few real calls on the experiment's own requests: latency, tokens, rate-limit headers, or the throughput of each batch size for a local model. Derives workers and batch size and lists every assumption |
+| `dry_run` | the resume decisions and the estimated spend without calling anything. Halts above `max_cost`, or when calibration measured no token counts to estimate the spend from |
 | `execute` | the loop above |
 | `analyse` | every analysis in `analyses` (default: attrition, plus the bootstrap summary of `metric`), each written as CSV |
 | `report` | `run.json`: the experiment, options, calibration, plan, event summary, outputs and provenance (evalcore commit, library versions) |
@@ -163,7 +163,7 @@ locally.
 | `backends/check.py` | `check_backend`: a conformance check for a backend you write |
 | `runner.py` | `plan()` and `execute()`: resume, batching, status, scoring |
 | `records.py` | the JSONL sink, the plan manifest, `.npz` array sidecars, `to_frame` |
-| `events.py` | the run's event log; `summarize_events`; `parse_log` for foreign logs |
+| `events.py` | the run's event log, `summarize_events`, `parse_log` for foreign logs |
 | `calibrate.py` | `calibrate`, `derive` |
 | `agent.py`, `tools.py` | `AgentBackend` (the multi-turn tool loop), `Tool` |
 | `hooks.py` | `hooked`: forward hooks that must match, are counted, and are always removed |
@@ -175,11 +175,11 @@ locally.
 | module | contents |
 |---|---|
 | `base.py` | `Task`: items, `render(unit) -> Request`, `score(unit, response) -> dict` |
-| `formats.py` | the canonical task format; `load_tasks` translates foreign JSON with a field mapping |
-| `graders.py` | `exact`, `contains`, `numeric`, `choice`, `yes_no`, `set_f1`, `abstain`, `label`; `score_teacher_forced` |
+| `formats.py` | the canonical task format. `load_tasks` translates foreign JSON with a field mapping |
+| `graders.py` | `exact`, `contains`, `numeric`, `choice`, `yes_no`, `set_f1`, `abstain`, `label`, `score_teacher_forced` |
 | `arithmetic.py` | addition by teacher forcing (the emergence experiments) |
 | `log_qa.py` | questions over generated execution traces, with exact gold |
-| `search_qa.py` | questions answerable only by searching an invented corpus; carries the gold documents |
+| `search_qa.py` | questions answerable only by searching an invented corpus. Carries the gold documents |
 
 **`evaluation/`: what the numbers mean**
 
@@ -196,11 +196,11 @@ locally.
 | module | contents |
 |---|---|
 | `pipeline.py` | `Experiment`: the stages in order, each replaceable |
-| `analyses.py` | what the analyse stage computes; any function of the frame |
+| `analyses.py` | what the analyse stage computes: any function of the frame |
 | `registry.py` | named factories for every component kind, yours included |
 | `config.py` | an `Experiment` from JSON, built through the registry |
 | `__main__.py` | the command line: `run`, `summarize`, `list` |
-| `testing.py` | `assert_same`: two results that must agree, compared with a stated tolerance; the golden snapshots use it |
+| `testing.py` | `assert_same`: two results that must agree, compared with a stated tolerance. The golden snapshots use it |
 
 ## Extension points
 
@@ -211,16 +211,16 @@ small interface at each point and checks it.
 |---|---|---|
 | a model | `Backend.identity()` and `complete` (or `complete_batch`) | `identity()` is required: it keys the cache, so it must name everything that changes an output |
 | a quick model | `FunctionBackend(fn, identity=...)` | `fn(request) -> str` |
-| activation capture | `Probe.identity`, `hooks`, `collect` | hooks see the padded batch (only the uncached tail under `prefix_cache`); `collect` returns one dict per request; arrays go to sidecars |
+| activation capture | `Probe.identity`, `hooks`, `collect` | hooks see the padded batch (only the uncached tail under `prefix_cache`). `collect` returns one dict per request. Arrays go to sidecars |
 | a task | `Task(name, items, render, score)`, or a JSONL file | `Task.from_file(path, mapping=...)` for a foreign format |
 | a grader | `@grader("name")` in `tasks/graders.py` | raise `ParseFailure` when the answer cannot be read |
-| a tool | `Tool(name, description, parameters, fn)` | `ToolInputError` goes back to the model; `ToolUnavailable` ends the episode as `tool_error` |
+| a tool | `Tool(name, description, parameters, fn)` | `ToolInputError` goes back to the model. `ToolUnavailable` ends the episode as `tool_error` |
 | embeddings | `Embedder.identity` and `_embed` | the vector cache comes with it |
 | a vector index | `Index.identity`, `build`, `search` | set `exact = False` and the recall cost is measured |
 | a retriever | `identity` and `retrieve(queries, k, repeat=0)` | runs through the harness via `RetrieverBackend`, which passes each unit's repeat index. A deterministic retriever ignores it |
 | a reranker | `PairScorer.identity` and `score(query, docs)` | wrap in `Reranker(first, scorer, docs, depth)` |
 | a pipeline stage | a function `(exp, res) -> None` | pass it as `Experiment(..., report=my_stage)` |
-| an analysis | a function `(frame, ctx) -> DataFrame` (or a dict of them) | `ctx.by` is the grid axes; pass it in `analyses` |
+| an analysis | a function `(frame, ctx) -> DataFrame` (or a dict of them) | `ctx.by` is the grid axes. Pass it in `analyses` |
 
 ### Your components in a config
 
@@ -251,7 +251,7 @@ def worst_items(metric: str, n: int = 20):
 The kinds are `task`, `backend`, `score`, `retriever`, `embedder`, `index`,
 `pair_scorer`, `analysis` and `stage`. A factory that needs something from
 the experiment declares it as a keyword-only parameter (`*, docs` for a
-retriever's corpus, `*, task` for a scorer); the experiment supplies it,
+retriever's corpus, `*, task` for a scorer). The experiment supplies it,
 and a config cannot override it.
 ## Writing a probe
 
@@ -320,7 +320,7 @@ DEFF = Var/Var_naive = 1 + (m-1) rho,     rho = s2_a / (s2_a + s2_e)
 n_eff = N / DEFF
 ```
 
-At `rho -> 1`, ten paraphrases of one question buy you one question; at
+At `rho -> 1`, ten paraphrases of one question buy you one question. At
 `rho -> 0` they buy ten. `summarize()` prints `n_eff` beside `n_rows` for
 exactly this reason.
 
@@ -415,7 +415,7 @@ For `out="runs/x.jsonl"`:
 | `runs/x.jsonl.calibration.json` | the calibration, reused while fresh |
 | `runs/x.jsonl.analysis/*.csv` | attrition and summary tables |
 | `runs/x.jsonl.run.json` | the report |
-| `runs/x.jsonl.done` | the job hash and its status (running or complete); on resume a complete job skips its model calls and only re-analyses |
+| `runs/x.jsonl.done` | the job hash and its status (running or complete). On resume a complete job skips its model calls and only re-analyses |
 
 ## Outside the package
 
@@ -426,7 +426,7 @@ For `out="runs/x.jsonl"`:
 | `examples/agent_example.py` | a scripted tool-calling model under `AgentBackend`, reaching every episode outcome, with `attrition` |
 | `scripts/preflight.py` | checks an API endpoint before a sweep: auth, request shape, truncation, latency, rate-limit headers |
 | `GLOSSARY.md` | the vocabulary, and the terms that collide |
-| `tests/golden/` | snapshots of end-to-end outputs; `make snapshots` rewrites them for review |
+| `tests/golden/` | snapshots of end-to-end outputs. `make snapshots` rewrites them for review |
 | `.githooks/pre-commit` | `make hooks` enables it: blocks a commit that changes library code without a test change, or fails `make check` |
 
 ## Vendoring
@@ -434,13 +434,13 @@ For `out="runs/x.jsonl"`:
 The core depends only on numpy, pandas, scipy and matplotlib. `httpx`,
 `torch` and `transformers`, and `faiss` are imported inside the classes
 that use them. To ship evalcore inside a bundle someone else must run, copy
-the `evalcore/` directory next to the entry script; no install step is
+the `evalcore/` directory next to the entry script. No install step is
 needed. **Carry `LICENSE` with it:** the MIT terms require the copyright
 notice to travel with any substantial portion of the code.
 
 ## License
 
-MIT; see [LICENSE](LICENSE). Copyright (c) 2026 Julia Steinberg.
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Julia Steinberg.
 
 This is a general-purpose tool, developed independently and not derived
 from any third party's confidential material.

@@ -139,8 +139,8 @@ def test_d5_a_taken_grader_name_needs_replace_true(monkeypatch):
 
 
 def test_d14_score_teacher_forced_by_hand():
-    """D14.  Hand-computed: argmax_ok [1, 0, 1, 1] gives tok_acc 3/4; one
-    miss means no exact match, em_tf 0; sum_logp and n_target pass through."""
+    """D14.  Hand-computed: argmax_ok [1, 0, 1, 1] gives tok_acc 3/4.  One
+    miss means no exact match (em_tf 0).  sum_logp and n_target pass through."""
     meta = {"argmax_ok": [1, 0, 1, 1], "em_tf": False, "sum_logp": -3.5,
             "n_target": 4}
     out = score_teacher_forced(None, Response("u", text=None, meta=meta))

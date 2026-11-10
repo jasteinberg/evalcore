@@ -8,7 +8,7 @@ A `Retriever` maps queries to ranked (doc id, score) lists and has an
     Reranker         any retriever's top `depth`, rescored by a PairScorer
                      (a function, or an HF cross-encoder)
     SampledRetriever a random k-subset drawn from a base retriever's scores
-                     (opt-in; the three above are deterministic)
+                     (opt-in: the three above are deterministic)
 
 and one control, for evaluating a reader that consumes retrieval:
 
@@ -17,7 +17,7 @@ and one control, for evaluating a reader that consumes retrieval:
                      alone ("none", the matched base condition), at the same k
 
 A `ScoredRetriever` also gives `score_all`: every document's score, not
-only the top k.  BM25 and a DenseRetriever over an ExactIndex do; an
+only the top k.  BM25 and a DenseRetriever over an ExactIndex do, but an
 approximate index cannot, and refuses.
 
 Ties are broken by document id everywhere, so a ranking is a function of
@@ -30,7 +30,7 @@ rows), so evaluation/retrieval.py can score it like any other model.
 
 Indexes.  `ExactIndex` is brute-force cosine (or dot product) in numpy:
 exact, dependency-free, and fast enough to roughly 1e5-1e6 passages.
-`FaissIndex` (HNSW or IVF; `pip install faiss-cpu`) is approximate, so a
+`FaissIndex` (HNSW or IVF, `pip install faiss-cpu`) is approximate, so a
 DenseRetriever over it MEASURES what the approximation costs: recall@k of
 the ANN results against the exact ones on a sample of queries,
 
@@ -39,8 +39,8 @@ the ANN results against the exact ones on a sample of queries,
 stored in `ann_recall` and warned about below `min_ann_recall`.  A weaker
 RAG result then shows up as a number, not as a silently worse retriever.
 With documents as the sample queries (the default when no queries are
-given) each query finds itself, which flatters the figure by up to 1/k;
-pass real queries for the honest one.
+given) each query finds itself, which flatters the figure by up to 1/k.
+Pass real queries for the honest one.
 
 BM25.  For query terms t and document d of length |d| (average length
 avgdl, N documents, n_t containing t, f_{t,d} occurrences),
@@ -50,7 +50,7 @@ avgdl, N documents, n_t containing t, f_{t,d} occurrences),
     idf_t = ln(1 + (N - n_t + 0.5) / (n_t + 0.5)),
 
 the non-negative idf (Lucene's), so a term in most documents adds little
-rather than subtracting.  Terms are lowercase alphanumeric runs; there is
+rather than subtracting.  Terms are lowercase alphanumeric runs, with
 no stemming.
 
 Sampled retrieval.  With base scores s_i over the n documents of the
@@ -70,12 +70,12 @@ z in descending order.  The first step is the Gumbel-max identity,
 
 and the ordered top k of z has exactly the sequential law above (Yellott
 1977; Kool, van Hoof and Welling 2019).  Limits: beta = 0 makes every
-ordering equally likely, so every k-subset has probability 1 / C(n, k);
-beta -> inf orders by s.  At beta = inf the base retriever's own ranking is
-returned unchanged and no noise is drawn.  That includes its tie rule and
-anything it leaves out (BM25 drops documents sharing no term with the
-query), whereas at finite beta every document is in the population.  The
-returned score is the base score s_i, not z_i.
+ordering equally likely, so every k-subset has probability 1 / C(n, k),
+and beta -> inf orders by s.  At beta = inf the base retriever's own
+ranking is returned unchanged and no noise is drawn.  That includes its
+tie rule and anything it leaves out (BM25 drops documents sharing no term
+with the query), whereas at finite beta every document is in the
+population.  The returned score is the base score s_i, not z_i.
 
 Seeding.  The noise for one query is a pure function of
 digest(identity, query, repeat): a fresh generator is seeded from that
@@ -101,10 +101,10 @@ id asc), G the query's gold set, and |G| <= k.  Then
 All three return k documents (removed returns n - |G| if that is fewer),
 filled by the same rule, so a reader's accuracy differs between them only
 through whether gold is present, not through how much context it reads.
-oracle - none measures what better retrieval could still buy; none -
-removed measures how much of the score depends on the gold text at all,
-and accuracy under removed is what the reader answers without it
-(parametric memory, or contamination).
+The difference oracle - none measures what better retrieval could still
+buy.  The difference none - removed measures how much of the score depends
+on the gold text at all, and accuracy under removed is what the reader
+answers without it (parametric memory, or contamination).
 
 "none" is the base condition to compare the controls against, rather than
 the base retriever itself.  pi is the FULL ranking, from `score_all`, so a
@@ -233,7 +233,7 @@ class BM25:
                 post.setdefault(t, ([], []))[0].append(j)
                 post[t][1].append(f)
         n = len(self.ids)
-        # term -> (doc indices, per-doc weight); the weight is the whole
+        # term -> (doc indices, per-doc weight). The weight is the whole
         # summand, so a query is a sum of precomputed vectors
         self.postings: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         for t, (js, fs) in post.items():
@@ -286,7 +286,7 @@ class Index(ABC):
     @abstractmethod
     def search(self, queries: np.ndarray, k: int
                ) -> tuple[np.ndarray, np.ndarray]:
-        """(n, k) row indices and scores; -1 where fewer than k exist."""
+        """(n, k) row indices and scores, with -1 where fewer than k exist."""
 
     @staticmethod
     def _check_metric(metric: str) -> None:
@@ -333,12 +333,12 @@ class ExactIndex(Index):
 
 class FaissIndex(Index):
     """FAISS, imported here only.  kind "hnsw" (m, ef_construction,
-    ef_search) or "ivf" (nlist, nprobe; trained on the corpus itself).
-    Cosine is inner product on normalised vectors.  HNSW built on several
-    threads need not be bit-reproducible; the measured ann_recall is the
-    guard.  On macOS with pip wheels, faiss and torch cannot share a
-    process (`omp_clash`); `build` refuses with the reason rather than let
-    the process abort."""
+    ef_search) or "ivf" (nlist, nprobe), which is trained on the corpus
+    itself.  Cosine is inner product on normalised vectors.  HNSW built on
+    several threads need not be bit-reproducible, and the measured
+    ann_recall is the guard.  On macOS with pip wheels, faiss and torch
+    cannot share a process (`omp_clash`), so `build` refuses with the reason
+    rather than let the process abort."""
 
     exact = False
 
@@ -481,7 +481,7 @@ class DenseRetriever:
         never computes most of them, and a substitute would change the
         population being sampled."""
         if not (isinstance(self.index, ExactIndex) and self.index.exact):
-            raise TypeError(f"score_all needs an ExactIndex; "
+            raise TypeError(f"score_all needs an ExactIndex, and "
                             f"{type(self.index).__name__} cannot give every "
                             f"document's score exactly")
         Q = self.embedder.embed(list(queries), "query", self.cache)
@@ -589,8 +589,8 @@ class Reranker:
 class SampledDraw:
     """One query's draw, for logging.  Arrays run over the whole corpus,
     columns in `ids` order.  `rank[j]` is document j's position in the full
-    descending order of `perturbed` (0 first); the first k positions are
-    `hits`.  At beta = inf, `noise` and `perturbed` are None (none is
+    descending order of `perturbed` (0 first), and the first k positions
+    are `hits`.  At beta = inf, `noise` and `perturbed` are None (none is
     drawn), `rank` is the order by (score desc, id asc), and `hits` are
     the base retriever's own."""
 
@@ -605,8 +605,8 @@ class SampledDraw:
 class SampledRetriever:
     """k documents drawn without replacement with probability proportional
     to exp(beta s_i), s_i the base retriever's score (law, limits and
-    seeding rule in the module docstring).  `retrieve` satisfies Retriever;
-    `draw` returns the same hits with the noise behind them."""
+    seeding rule in the module docstring).  `retrieve` satisfies Retriever,
+    and `draw` returns the same hits with the noise behind them."""
 
     uses_repeat = True
 
@@ -685,7 +685,7 @@ class GoldControl:
     against), at the same k (definitions in the module docstring).
 
     `gold` maps each query, as the retriever receives it, to its gold doc
-    ids; `gold_by_query` builds it from items.  A query not in it is
+    ids, and `gold_by_query` builds it from items.  A query not in it is
     refused, never answered from the base alone, in every mode, so the
     three conditions run on the same queries."""
 
@@ -838,7 +838,7 @@ def gold_search_tool(base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
                      docs: Mapping[str, str], mode: str, k: int = 3,
                      name: str = "search") -> Tool:
     """The gold controls (module docstring) as an agent's search tool.  The
-    ranking is the base's for the agent's own query; the gold set is the
+    ranking is the base's for the agent's own query, and the gold set is the
     item's, looked up by the unit's item id in `gold` (gold_by_item builds
     it).  An item with no entry is an error, never a plain search.  The
     tool presents itself exactly as search_tool does, so the agent cannot

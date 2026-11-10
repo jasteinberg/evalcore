@@ -1,7 +1,7 @@
 """Context tools: an agent's tool told which unit it serves.  Plain tools and
-plain agents keep their identities and keys; a sampled search draws per
-repeat inside agent episodes; the gold controls work for an agent's own
-queries; and an item-dependent episode is never served from another item's
+plain agents keep their identities and keys.  A sampled search draws per
+repeat inside agent episodes.  The gold controls work for an agent's own
+queries.  An item-dependent episode is never served from another item's
 cache entry."""
 
 from __future__ import annotations

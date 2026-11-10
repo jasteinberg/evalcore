@@ -137,7 +137,7 @@ def calibration_caveats(cal: Calibration) -> list[str]:
     """Reasons the derived settings rest on too little to trust as they are.
 
     * Few successful calls (HTTP): the median latency L of n calls has a
-      relative spread of order 1/sqrt(n), and W is proportional to L; below
+      relative spread of order 1/sqrt(n), and W is proportional to L.  Below
       MIN_OK_CALLS it is one or two draws from a latency distribution that
       is typically right-skewed, and the token counts likewise.
     * Failed calls: what failed in calibration fails in the run.
@@ -205,7 +205,7 @@ def _derive(cal: Calibration, max_workers: int, safety: float
                      f"{per_call:.0f} tokens per call")
     if not rpm and not tpm:
         bounds.append(2)
-        notes.append("no rate-limit headers: starting at 2 workers; 429s are "
+        notes.append("no rate-limit headers: starting at 2 workers, and 429s are "
                      "retried with the server's requested delay")
     workers = max(1, min(bounds))
     notes.append(f"workers = min{tuple(bounds)} = {workers} (safety {safety})")

@@ -2,7 +2,7 @@
 
 An id is an identity only if it is injective on what changes a result and
 blind to what does not.  Each expected value is an invariance fixed by the
-construction (two inputs that change the output must get two ids; two that
+construction (two inputs that change the output must get two ids, and two that
 cannot must get one), never a digest computed by the code under test.
 
 A newly found violation of a catalogue row lands as a strict xfail whose
@@ -61,7 +61,7 @@ def test_ids_without_arrays_did_not_move_with_the_array_fix():
     existing cache key and sink row of a JSON-only sweep must still match.
     The literals were recorded from the code BEFORE the fix (31 Oct), so
     they are independent of it.  np.float64 is a float subclass and was
-    always hashed as its value; np.int64 always went through `str`."""
+    always hashed as its value, while np.int64 always went through `str`."""
     p = {"model": "claude-x", "temperature": 0.7, "max_tokens": 256,
          "stop": ["\n", "END"], "nested": {"b": [1, 2.5, None, True], "a": "é"}}
     assert Cell(p).id == "5001073a30fbad2e14c76e8eca5ac6f7"
@@ -72,7 +72,7 @@ def test_ids_without_arrays_did_not_move_with_the_array_fix():
 
 
 def test_tags_never_shadow_params():
-    """B35.  A tag and a param share the key `model`; by construction the
+    """B35.  A tag and a param share the key `model`.  By construction the
     param is "m" and the tag "x".  Tags bear no identity, so the frame's
     `model` column must be the param, and the cell id must equal that of the
     same params with no tags."""
@@ -134,7 +134,7 @@ def test_a_cell_param_cannot_take_an_identity_column_name(tmp_path):
 
 
 def test_a_scorer_cannot_overwrite_the_unit_id(tmp_path):
-    """B3.  The unit's id is fixed by its (cell, item, repeat); a scorer that
+    """B3.  The unit's id is fixed by its (cell, item, repeat).  A scorer that
     returns a `unit_id` key would re-key the row onto another unit (or none).
     Expected: the row keeps the unit's own id and is an error row."""
     us = list(units(grid({"model": ["m"]}), items(1)))

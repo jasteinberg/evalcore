@@ -10,8 +10,8 @@
    forward pass" is an assertion (`check_counts`), not an assumption.
 
 Model-specific capture code -- which tensors to read, which positions --
-stays with the caller (typically a Probe handed to HFBackend);
-torch is never imported here.
+stays with the caller (typically a Probe handed to HFBackend),
+and torch is never imported here.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def match_modules(model: Any, pattern: str) -> list[str]:
     if not hits:
         close = [n for n in names if pattern.rsplit(".", maxsplit=1)[-1] in n][:5]
         raise KeyError(f"no module matches {pattern!r}"
-                       + (f"; similar names: {close}" if close else ""))
+                       + (f". Similar names: {close}" if close else ""))
     return hits
 
 
@@ -46,7 +46,7 @@ def hooked(model: Any, hooks: Mapping[str, Callable[..., Any]],
 
     Forward hooks get (module, args, output) -- or (module, args, kwargs,
     output) with `with_kwargs` -- and pre-hooks (`pre=True`) get
-    (module, args) or (module, args, kwargs); `fn` receives the module's
+    (module, args) or (module, args, kwargs).  `fn` receives the module's
     name first.  A non-None return replaces the output (or the inputs, for
     pre-hooks), as torch defines.  Yields the per-module call counter, with
     every hooked module present from the start: a module that never runs

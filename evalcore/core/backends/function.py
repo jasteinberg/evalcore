@@ -21,7 +21,7 @@ class FunctionBackend(Backend):
     Two FunctionBackends with different models and the same identity would
     share results, which is the failure this argument exists to prevent.
 
-    `fn` may raise `Transient` (retried) or `Fatal` (not); anything else is
+    `fn` may raise `Transient` (retried) or `Fatal` (not).  Anything else is
     turned into an error row by the runner.  A returned Response is bound
     to the request it answers, so fn need not copy the unit_id."""
 

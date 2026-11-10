@@ -6,7 +6,7 @@ Each item is n_shots worked examples and a query,
 
 with d-digit operands drawn uniformly (the leading digit non-zero for
 d > 1).  The target begins with a space and the prompt ends without one, so
-the answer starts on a token boundary for byte-level BPE tokenisers; the
+the answer starts on a token boundary for byte-level BPE tokenisers, and the
 backend verifies that per item rather than assuming it.
 
 Few-shot leakage.  Shots drawn independently of the query sometimes carry
@@ -14,7 +14,7 @@ the query's answer verbatim (for d = 2, about 2.7% of items: four shots,
 each matching one of ~180 possible sums), and small models copy it.  At the
 foot of an emergence curve the copied answers can be a large share of the
 correct ones.  `exclude_leaks=True` (the default) redraws any shot whose
-answer equals the query's, or which is the query itself; every item records
+answer equals the query's, or which is the query itself.  Every item records
 whether it leaked in `meta["leak"]`, so `leak_rate` can audit any dataset.
 `exclude_leaks=False` reproduces the earlier generator's draws exactly
 (shots first, then the query, from one `random.Random(seed)`), for
@@ -62,7 +62,7 @@ def arithmetic_items(digits: int = 2, n_items: int = 1024, n_shots: int = 4,
                      op: str = "+", seed: int = 0, spaced: bool = False,
                      exclude_leaks: bool = True) -> list[Item]:
     """Deterministic items.  Queries are unique while the question space
-    allows (d = 1 has only 100 pairs; then duplicates are admitted rather
+    allows (d = 1 has only 100 pairs, so duplicates are then admitted rather
     than looping forever).  `spaced` renders answers digit by digit, which
     makes the answer length equal its digit count."""
     if op not in _OPS:

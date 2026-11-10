@@ -47,7 +47,7 @@ __all__ = ["FunctionProbe", "Probe"]
 class Probe(ABC):
     pre: bool = False                # pre-forward hooks instead of forward hooks
     with_kwargs: bool = False        # hooks receive the module's kwargs
-    # How many times each hooked module must run per forward pass; None
+    # How many times each hooked module must run per forward pass.  None
     # disables the check (e.g. a module reused a variable number of times).
     calls_per_forward: int | None = 1
 
@@ -60,7 +60,7 @@ class Probe(ABC):
         return {}
 
     def start(self, enc: Mapping[str, Any], reqs: Sequence[Any]) -> None:  # noqa: B027 - optional no-op
-        """Called before each forward pass; reset per-batch state here."""
+        """Called before each forward pass.  Reset per-batch state here."""
 
     @abstractmethod
     def collect(self, out: Any, enc: Mapping[str, Any],

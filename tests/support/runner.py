@@ -18,9 +18,9 @@ import pytest
 import evalcore.core.backends.base as backends_mod
 from evalcore import Backend, Item, Request, Response, Unit, execute
 
-# Two values per decode key, chosen to differ; nested values included because
-# `stop` is a list and a key that only looked at its first element would pass
-# a scalar-only test.
+# Two values per decode key, chosen to differ.  Nested values are included
+# because `stop` is a list and a key that only looked at its first element
+# would pass a scalar-only test.
 DECODE_VALUES: dict[str, tuple[Any, Any]] = {
     "temperature": (0.0, 0.7), "top_p": (1.0, 0.9), "top_k": (1, 40),
     "max_tokens": (8, 256), "seed": (0, 1), "stop": (["\n"], ["\n", "##"]),
@@ -67,7 +67,7 @@ def run(us: list[Unit], backend: Backend, out: Path, **kw: Any) -> Any:
 
 @pytest.fixture
 def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retries sleep U(0, 2^k) s; the schedule is not what is under test."""
+    """Retries sleep U(0, 2^k) s.  The schedule is not what is under test."""
     monkeypatch.setattr(backends_mod.time, "sleep", lambda s: None)
 
 
@@ -118,7 +118,7 @@ class Dies(Backend):
     kill with anything catchable would test the wrong path.
 
     `fail_on` names item_ids that come back as error RESPONSES instead --
-    the other, already-visible category; the two must not be conflated.
+    the other, already-visible category.  The two must not be conflated.
     `on_call(k)` runs before the k-th call.
     """
 

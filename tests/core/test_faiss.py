@@ -1,7 +1,7 @@
 """Approximate indexes, measured against the exact one.  Where faiss and
 torch cannot share a process (pip wheels on macOS, search.omp_clash) this
-file skips and test_search runs it in a fresh interpreter instead;
-everywhere else it runs here."""
+file skips and test_search runs it in a fresh interpreter instead.
+Everywhere else it runs here."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ if not os.environ.get("EVALCORE_FAISS_ALONE"):
     with contextlib.suppress(ImportError):
         import torch  # noqa: F401
 if omp_clash() is not None:
-    pytest.skip("faiss cannot load beside torch here; test_search runs this "
+    pytest.skip("faiss cannot load beside torch here, so test_search runs this "
                 "file in a fresh process", allow_module_level=True)
 faiss = pytest.importorskip("faiss")
 

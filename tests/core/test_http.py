@@ -2,7 +2,7 @@
 included), what goes over the wire, errors, retries and rate limits.
 
 Expected shapes follow each provider's reference as read on 2 Oct 2026
-(Anthropic Messages tool use; OpenAI Chat Completions types; Gemini
+(Anthropic Messages tool use, OpenAI Chat Completions types, Gemini
 generateContent).  A scripted server (httpx.MockTransport) answers every
 call, and the end-to-end tests check what actually goes over the wire."""
 
@@ -91,7 +91,7 @@ def test_truncation_is_normalised_across_providers(parse, js, want):
 def test_a18_a_gemini_reply_without_candidates_is_not_an_ok_empty_row(
         feedback, phrase):
     """A18. Gemini's documented reply to a blocked prompt carries
-    promptFeedback.blockReason and no candidates; with no blockReason the
+    promptFeedback.blockReason and no candidates.  With no blockReason the
     reply is unexplained.  Expected either way: an error (naming the block
     reason when there is one), never ok with text ""."""
     be, _ = mock_http("gemini", lambda req: httpx.Response(200, json={

@@ -53,7 +53,7 @@ def test_a37_fatal_is_called_exactly_once():
 def test_decode_signature_tracks_decode_keys_only(key, a, b):
     """Each of these changes what the model emits (a checkpoint-supplied
     repetition penalty included), so cells differing in it must not share a
-    batch; a non-decode key ("model") must not split one."""
+    batch.  A non-decode key ("model") must not split one."""
     assert key in DECODE_KEYS
     assert decode_signature({key: a}) != decode_signature({key: b})
     assert (decode_signature({key: a, "model": "x"})
@@ -65,7 +65,7 @@ def test_decode_signature_tracks_decode_keys_only(key, a, b):
 def test_hf_splits_a_batch_by_decode_params_only(budgets, groups):
     """The bug this guards: one generate() call per batch means a mixed batch
     silently ran every request at reqs[0]'s settings.  A mixed batch runs
-    as one call per setting; a homogeneous one stays one call."""
+    as one call per setting, and a homogeneous one stays one call."""
     seen = []
 
     class Spy(HFBackend):

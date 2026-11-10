@@ -19,7 +19,8 @@ The package in three layers, each importable on its own:
     records      the append-only sink, plan manifest, array sidecars
     events       the run's event log: read, summarise, parse foreign logs
     calibrate    measure a backend, derive workers / batch size
-    agent, tools multi-turn tool use; hooks: forward hooks done safely
+    agent, tools multi-turn tool use
+    hooks        forward hooks done safely
     embed        embedders (function, HF, OpenAI / Gemini), the vector cache
     search       BM25, exact and FAISS indexes, dense retrieval, reranking,
                  sampled (Plackett-Luce) retrieval, the search tool,

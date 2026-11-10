@@ -41,7 +41,7 @@ def curve_experiment(tmp_path, **kw):
 
 
 def test_curves_are_fitted_per_combination_of_the_other_axes(tmp_path):
-    """Crossing of 0.5, linear in log x: condition a at log10 x = 1 (x = 10);
+    """Crossing of 0.5, linear in log x: condition a at log10 x = 1 (x = 10),
     condition b (values 0.25, 0.75, 1.25) at log10 x = 1/2 (x = sqrt 10)."""
     res = curve_experiment(tmp_path, analyses={
         "curve": value_curve("x", "v", levels=[0.5], n_boot=50)}).run()
@@ -125,9 +125,10 @@ def test_d28_curves_refuse_a_frame_without_status(fit, tmp_path):
 
 def test_c6_an_item_failing_at_every_x_is_counted_through_the_experiment(
         tmp_path):
-    """C6 through the analyse stage.  Four items on x in {1, 10, 100}; the
-    backend refuses item i3 at every x, so i3 has error rows only.  By hand:
-    3 items enter the curve and 1 is dropped, and the peak table says so."""
+    """C6 through the analyse stage.  Four items on x in {1, 10, 100}, and
+    the backend refuses item i3 at every x, so i3 has error rows only.  By
+    hand: 3 items enter the curve and 1 is dropped, and the peak table says
+    so."""
     def model(req):
         k = int(req.messages[-1]["content"].split()[-1])
         if k == 3:

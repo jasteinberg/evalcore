@@ -2,7 +2,7 @@ r"""Question answering over structured execution logs, generated.
 
 Every trace is generated from a seed: a tree of operations ("spans"), each
 with an id, a parent, a start and end time, a status and a few attributes.
-Children run one after another inside their parent's interval; some
+Children run one after another inside their parent's interval.  Some
 operations fail, and a failed operation is sometimes retried.  Nothing is
 hand-written, so there are as many traces as wanted, of any size and depth,
 and every question's gold answer is computed from the trace -- exact by
@@ -78,7 +78,7 @@ class Span:
 def generate_trace(rng: random.Random, n_spans: int = 20, max_depth: int = 3,
                    p_error: float = 0.15, p_retry: float = 0.6) -> list[Span]:
     """A trace of about `n_spans` spans, in start-time order (the root
-    first).  Durations are log-normal; a parent's interval contains its
+    first).  Durations are log-normal, and a parent's interval contains its
     children run in sequence with small gaps."""
     spans: list[Span] = []
 
@@ -168,7 +168,7 @@ def _questions(spans: list[Span], text: str, rng: random.Random,
                types: Sequence[str], position: float | None
                ) -> list[tuple[str, str, Any, Any, dict]]:
     """(type, question, gold, grader, extra meta) for each type that the
-    trace supports; a type with no well-defined answer here is skipped
+    trace supports.  A type with no well-defined answer here is skipped
     (e.g. `slowest` with a tie, `retries` with no retried operation)."""
     root, body = spans[0], spans[1:]
     names = sorted({s.name for s in spans})
@@ -298,7 +298,7 @@ def log_qa_task(n_traces: int = 50, fmt: str = "log", n_spans: int = 20,
                 position: float | None = None, seed: int = 0,
                 p_error: float = 0.15, p_retry: float = 0.6) -> Task:
     """The items as a Task with the canonical render and grader-driven
-    score (Task's defaults); works with any generating backend."""
+    score (Task's defaults).  Works with any generating backend."""
     return Task(f"log_qa_{fmt}", log_qa_items(
         n_traces, fmt, n_spans, max_depth, types, position, seed,
         p_error=p_error, p_retry=p_retry))

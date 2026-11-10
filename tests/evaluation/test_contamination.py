@@ -23,8 +23,9 @@ def test_overlap_is_type_level_not_token_level():
     """Repeating a memorised phrase must not inflate the score.
 
     "abababzq" against "abcd" at n=2 has bigram tokens ab ba ab ba ab bz zq
-    and types {ab, ba, bz, zq}; only "ab" is in the reference.  Type-level
-    overlap is 1/4; token-level would be 3/7, inflated by the repeats."""
+    and types {ab, ba, bz, zq}, and only "ab" is in the reference.
+    Type-level overlap is 1/4, while token-level would be 3/7, inflated by
+    the repeats."""
     assert ngram_overlap("abababzq", "abcd", 2) == pytest.approx(1 / 4)
     assert ngram_overlap("abzq", "abcd", 2) == pytest.approx(1 / 3)
     ref = "the cat sat on the mat"
@@ -84,7 +85,7 @@ def test_report_without_control_omits_excess_columns():
 
 
 def test_c31_a_candidate_named_control_is_refused():
-    """C31.  The control row is keyed "control"; a candidate with that name
+    """C31.  The control row is keyed "control".  A candidate with that name
     would be overwritten by it (and the excess computed against itself), so
     report must refuse the clash."""
     with pytest.raises(ValueError, match="control"):

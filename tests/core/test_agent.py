@@ -64,7 +64,7 @@ def episode(policy, tools=None, **kw) -> Response:
 def one_row(tmp_path, be, label="a", tools=None,
             score=lambda u, r: {}) -> pd.Series:
     """`be` run through the runner on one item (a request carrying `tools`
-    specs if given); the row."""
+    specs if given), returning the row."""
     df = execute(units(grid({"condition": [label]}), [Item("q0", {})]), be,
                  lambda u: Request(u.id, [{"role": "user", "content": "q"}],
                                    {}, tools=tools),
@@ -153,10 +153,10 @@ def test_infrastructure_and_bugs_are_told_apart(tmp_path):
 def test_a33_tool_results_are_cached_except_failures_and_keyed_on_version(
         tmp_path):
     """A33.  The tool's result drifts per call, so only the cache can make a
-    rerun replay it.  Expected call counts are hand-counted: episode 1's
-    tool call raises ToolUnavailable (1 call); episode 2 must call the tool
-    again (2), then succeed and cache; episode 3, same tool, is served from
-    the cache (still 2); episode 4 with version "2" must miss (3)."""
+    rerun replay it.  Expected call counts are hand-counted.  Episode 1's
+    tool call raises ToolUnavailable (1 call).  Episode 2 must call the tool
+    again (2), then succeed and cache.  Episode 3, same tool, is served from
+    the cache (still 2).  Episode 4 with version "2" must miss (3)."""
     calls = []
 
     def fn(args):
@@ -186,7 +186,7 @@ def test_a32_identity_covers_inner_model_tools_and_caps():
     """A32. Invariance: a different inner model, a different corpus behind
     the tool, a bumped tool version or a different cap each changes what an
     episode can return, so each must give a different identity from the
-    base; the same construction twice must give the same one."""
+    base, and the same construction twice must give the same one."""
 
     def agent(policy="p", tools=None, **kw):
         return str(AgentBackend(scripted(two_hop, policy),

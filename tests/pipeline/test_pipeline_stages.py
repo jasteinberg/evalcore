@@ -17,7 +17,7 @@ from evalcore.pipeline import Experiment, RunOptions
 from evalcore.tasks.base import Task
 
 pytestmark = pytest.mark.filterwarnings(
-    # plumbing fixtures are deliberately tiny; caveats are tested in test_stats
+    # plumbing fixtures are deliberately tiny. Caveats are tested in test_stats
     "ignore:.*carry caveats:RuntimeWarning")
 
 
@@ -132,8 +132,9 @@ def test_execute_none_reanalyses_and_needs_no_budget(tmp_path):
 
 def test_d23_a_saved_calibration_expires_after_its_max_age(tmp_path):
     """D23.  Contract (RunOptions.calibration_max_age_h = 24): a saved
-    calibration measured 25 h ago is not reused (5 new calls); one measured
-    23 h ago is (0 calls).  The ages are written by hand into the file."""
+    calibration measured 25 h ago is not reused (5 new calls), but one
+    measured 23 h ago is (0 calls).  The ages are written by hand into the
+    file."""
     only = {"dry_run": None, "execute": None, "analyse": None, "report": None}
     exp, fn = make(tmp_path, **only)        # six units >= calibrate_n
     exp.run()
@@ -168,7 +169,7 @@ def test_d7_a_backend_reporting_no_tokens_halts_a_budgeted_run(tmp_path,
     """D7, the case only the dry run can see: prices and calibration are
     there, but the backend reports no token counts, so the calibration has
     no per-call tokens and the cost cannot be estimated.  The run halts
-    before execute unless confirmed; confirmed, all six units run."""
+    before execute unless confirmed.  Confirmed, all six units run."""
     calls = []
 
     def silent(req):                     # text only: no in/out token counts

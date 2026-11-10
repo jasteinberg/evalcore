@@ -55,8 +55,8 @@ def test_hooks_are_removed_even_when_the_forward_raises():
 
 def test_an_identity_hook_changes_nothing_and_an_edit_takes_effect():
     """alpha = 0 must be the identity, bitwise (an intervention at zero
-    strength that changes the output is a bug in the hook, not an effect);
-    a non-None return must replace the output."""
+    strength that changes the output is a bug in the hook, not an effect),
+    and a non-None return must replace the output."""
     m = net()
     clean = m(X)
     with hooked(m, {"1.0": lambda n, mod, a, out: out + 0.0 * out}):

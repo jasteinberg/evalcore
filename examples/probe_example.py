@@ -13,7 +13,7 @@ linearly in alpha -- while alpha is small against the residual's norm
 |h|.  The final RMSNorm divides by the norm of h + alpha v, so once
 alpha >> |h| the margin saturates at the value v alone would give.  The
 grid spans both regimes.  The same probe captures the residual at the
-read position before the patch; that vector goes to an .npz sidecar, not
+read position before the patch.  That vector goes to an .npz sidecar, not
 into the JSONL row, and its norm locates the crossover.
 
 One backend per alpha: the probe's identity carries alpha, so each value
@@ -83,8 +83,8 @@ class Steer(Probe):
 
     def start(self, enc, reqs) -> None:
         # The read position, as a hook index.  enc positions are full-prompt
-        # positions; under prefix_cache the first n_prefix_reused of them were
-        # not fed, so the hook sees index p - n_prefix_reused.  This probe
+        # positions.  Under prefix_cache the first n_prefix_reused of them
+        # were not fed, so the hook sees index p - n_prefix_reused.  This probe
         # patches only the read position, which is safe under reuse.
         self.read = [p - n for p, n in zip(enc["last"], enc["n_prefix_reused"],
                                            strict=True)]
@@ -134,7 +134,7 @@ def main(out_dir: str) -> None:
     print(f"{len(df)} rows, statuses {df['status'].value_counts().to_dict()}")
     norms = [np.linalg.norm(load_arrays(out, rel)["resid_read"])
              for rel in df["meta_arrays"]]
-    print(f"sidecars: resid_read of width {WIDTH} per row; median |h| at the "
+    print(f"sidecars: resid_read of width {WIDTH} per row, median |h| at the "
           f"read position {np.median(norms):.3f}")
 
     with warnings.catch_warnings():               # printed below instead

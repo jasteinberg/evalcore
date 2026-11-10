@@ -41,8 +41,8 @@ class HFBackend(Backend):
     pass: its `collect(out, enc, reqs)` receives the raw model output, the
     tokenizer encoding and the requests, and returns one dict per request
     (`FunctionProbe(fn)` makes one from a plain function).  The layout of
-    `enc` differs by path and under prefix reuse; `_probing` documents it
-    key by key.  Exactly one dict per request, or the batch fails with an
+    `enc` differs by path and under prefix reuse, and `_probing` documents
+    it key by key.  Exactly one dict per request, or the batch fails with an
     error naming the probe.
 
     Everything model-specific -- per-head attention shares over item spans,
@@ -60,8 +60,8 @@ class HFBackend(Backend):
     What a slot holds.  For a prompt x_0..x_{T-1} a slot stores the cache
     of x_0..x_{T-2} only: everything after the call is cropped back to
     T - 1 positions.  The read position is the last prompt token T - 1,
-    and a probe may patch activations there (and at generated tokens);
-    under the causal mask a patch at position t changes the keys and
+    and a probe may patch activations there (and at generated tokens).
+    Under the causal mask a patch at position t changes the keys and
     values at t and later only, so positions < T - 1 are the unpatched
     model's whatever the probe did.  Hence a stored prefix never contains
     a patched position or a generated token, and every call computes at
@@ -69,7 +69,7 @@ class HFBackend(Backend):
     reuses T - 1 positions.
 
     Which slot.  The slot with the longest common prefix n (ties: the most
-    recently used); n = 0 runs a full pass.  The new prompt's cache goes
+    recently used), and n = 0 runs a full pass.  The new prompt's cache goes
     into the slot it extends when it extends one completely (that slot is
     superseded: any prompt matching it matches the new one at least as
     far), else into an empty slot, else over the least recently used.
@@ -95,7 +95,7 @@ class HFBackend(Backend):
 
     name = "hf"
     supports_target = True
-    # the decode params `_run_batch` passes to generate(); keep in step with it
+    # the decode params `_run_batch` passes to generate(), kept in step with it
     GENERATE_KEYS = frozenset({"max_tokens", "temperature",
                                "repetition_penalty"})
 
@@ -124,7 +124,7 @@ class HFBackend(Backend):
         self.output_attentions, self.generate = output_attentions, generate
         self.default_params = dict(default_params or {})
         self.prefix_cache, self.prefix_slots = prefix_cache, prefix_slots
-        # per slot: (the cached token ids, their KV cache), or None if empty;
+        # per slot: (the cached token ids, their KV cache), or None if empty,
         # and the tick at which it was last used, for LRU eviction
         self._slots: list[tuple[list[int], DynamicCache] | None] = \
             [None] * (prefix_slots or 0)
@@ -144,15 +144,15 @@ class HFBackend(Backend):
                 "commit": getattr(getattr(self.model, "config", None),
                                   "_commit_hash", None),
                 # the same weights in bf16 and fp32 give different logits,
-                # and a chat template decides the prompt the model reads;
-                # neither shows in the request
+                # and a chat template decides the prompt the model reads,
+                # but neither shows in the request
                 "dtype": self._dtypes(),
                 "chat_template": (digest(self.tok.chat_template)
                                   if self._templated() else None),
                 "generate": self.generate,
                 "output_attentions": self.output_attentions,
                 "probe": None if self.probe is None else self.probe.identity(),
-                # only when on (the flag adds no key when off); K with it,
+                # only when on (the flag adds no key when off), and K with it,
                 # since K moves the split points
                 **({"prefix_cache": True, "prefix_slots": self.prefix_slots}
                    if self.prefix_cache else {})}
@@ -160,7 +160,7 @@ class HFBackend(Backend):
     def refusal(self, req: Request) -> str | None:
         if self.prefix_cache and req.target is not None:
             return ("HFBackend(prefix_cache=True) does not teacher-force "
-                    "targets; score them with a backend without prefix_cache")
+                    "targets. Score them with a backend without prefix_cache")
         if self.probe is None:
             # without a probe nothing here reads a param outside DECODE_KEYS
             # (complete_batch checks those per path), so any other key -- a
@@ -183,7 +183,7 @@ class HFBackend(Backend):
         the LEFT -- under right padding they return pad columns and shifted spans
         with no error raised.  Many instruct tokenizers also ship `pad_token=None`
         (Llama, Mistral), which silently changes what the truncation check below
-        measures; falling back to eos is safe because pad columns are masked out
+        measures.  Falling back to eos is safe because pad columns are masked out
         of attention.  A None tokenizer is left alone: the batching logic is
         tested with a stub that never reaches the encode path.
         """
@@ -197,7 +197,7 @@ class HFBackend(Backend):
 
     def complete(self, req: Request) -> Response:
         """A single request is a batch of one.  `execute` calls this whenever
-        batch_size == 1; without it the base class raised
+        batch_size == 1.  Without it the base class raised
         NotImplementedError and every unit became an error row."""
         return self.complete_batch([req])[0]
 
@@ -251,16 +251,16 @@ class HFBackend(Backend):
         of T - n_prefix_reused there, and full position p sits at index
         p - n_prefix_reused (the read position at the last index).  Later
         forwards inside generate() see one new token each.  `out` likewise
-        covers the fed positions only (logits, hidden states; attention
-        weights have the fed positions as queries and all T as keys).  On
-        the candidates path lm_head is applied only at the kept positions
+        covers the fed positions only (logits, hidden states, and attention
+        weights, which have the fed positions as queries and all T as keys).
+        On the candidates path lm_head is applied only at the kept positions
         (`logits_to_keep`), one per row, with or without reuse.
 
         A patch is safe under reuse only at the read position or later
         (generated tokens): `_reusing` stores positions < T - 1, which a
         patch at T - 1 cannot reach under the causal mask.  A probe that
         writes to an earlier fed position would leave it in a stored prefix
-        and reach later calls; that is not detectable here, so do not."""
+        and reach later calls.  That is not detectable here, so do not."""
         holder = SimpleNamespace(out=None, extras=[{} for _ in reqs])
         if self.probe is None:
             yield holder
@@ -279,7 +279,7 @@ class HFBackend(Backend):
                     else type(self.probe).__name__)
             raise ValueError(
                 f"{what} returned {len(extras)} dicts for {len(reqs)} "
-                f"requests; it must return exactly one per request")
+                f"requests, but it must return exactly one per request")
         holder.extras = extras
 
     @contextmanager
@@ -293,10 +293,10 @@ class HFBackend(Backend):
         unpadded row of ids x_0..x_{T-1}): n = the longest common prefix
         with any slot's ids, capped at T - 1 so the read position T - 1 is
         always fed.  That slot's cache, cropped to n, is passed as
-        `past_key_values`; the attention mask still covers all T positions,
+        `past_key_values`.  The attention mask still covers all T positions,
         and positions continue from n (the model derives them from the
         cache length).  `feed_tail` feeds x_n..x_{T-1} only, for a plain
-        forward; generate() takes the full ids and skips the cached part
+        forward, while generate() takes the full ids and skips the cached part
         itself.  The call fills the cache in place, so afterwards it is
         cropped to T - 1 (dropping the read position, which a probe may
         have patched, and any generated tokens) and stored.  The class
@@ -346,8 +346,8 @@ class HFBackend(Backend):
 
     def _best_slot(self, ids: Sequence[int]) -> tuple[int | None, int]:
         """The slot sharing the longest token prefix with `ids` (ties: the
-        most recently used) and that length capped at len(ids) - 1; (None,
-        0) when no slot shares even the first token."""
+        most recently used) and that length capped at len(ids) - 1, or
+        (None, 0) when no slot shares even the first token."""
         best: tuple[int, int, int] | None = None     # (n, last used, slot)
         for k, s in enumerate(self._slots):
             if s is None:
@@ -362,8 +362,8 @@ class HFBackend(Backend):
         self._last_used[k] = self._tick
 
     def _dtypes(self) -> str | None:
-        """The parameter dtypes, sorted and comma-joined ("torch.bfloat16";
-        a partly quantised model lists several).  None for the stub models
+        """The parameter dtypes, sorted and comma-joined ("torch.bfloat16",
+        or several for a partly quantised model).  None for the stub models
         some tests pass as `model=None`."""
         if self.model is None:
             return None
@@ -371,7 +371,7 @@ class HFBackend(Backend):
 
     def _eos_ids(self) -> set[int]:
         """Token ids that end a generation: the tokenizer's eos and every id
-        in the checkpoint's generation_config.eos_token_id (an int or a list;
+        in the checkpoint's generation_config.eos_token_id (an int or a list:
         Llama 3 instruct stops on <|eot_id|> as well as <|end_of_text|>).
         generate() stops on the latter, so the truncation check reads it
         too.  A model without a generation_config (a test stub) has only
@@ -390,7 +390,7 @@ class HFBackend(Backend):
     def _encode(self, text: str) -> list[int]:
         """Token ids of rendered text.  A chat template already writes the
         special tokens it wants (Llama's emits BOS itself), so templated text
-        is encoded WITHOUT adding them again; plain text gets the
+        is encoded WITHOUT adding them again, while plain text gets the
         tokenizer's own (Pythia adds none)."""
         return list(self.tok(text, add_special_tokens=not self._templated())
                     ["input_ids"])
@@ -412,7 +412,7 @@ class HFBackend(Backend):
 
         Requests with a `target` are teacher-force scored (`_score_batch`)
         and requests with `candidates` get the restricted next-token
-        distribution (`_choice_batch`), whatever `generate` says; a batch
+        distribution (`_choice_batch`), whatever `generate` says.  A batch
         mixing kinds is split by kind the same way."""
         kinds = ["target" if r.target is not None
                  else "choice" if r.candidates is not None else "plain"
@@ -461,7 +461,7 @@ class HFBackend(Backend):
         the request is refused rather than silently scoring a merged token
         or a shifted span.  The usual convention -- prompt ending in "=",
         target starting with a space -- always passes, because byte-level
-        BPE merges never cross a space-led boundary of this kind; the check
+        BPE merges never cross a space-led boundary of this kind, and the check
         is what makes that a guarantee instead of an assumption."""
         prompt = self._render(req)
         p_ids = self._encode(prompt)
@@ -481,7 +481,7 @@ class HFBackend(Backend):
     def _prepared(self, reqs: Sequence[Request],
                   prepare: Callable[[Request], Any]
                   ) -> tuple[list[Response | None], list[tuple[int, Any]]]:
-        """Run `prepare` on each request; one that raises Fatal becomes an
+        """Run `prepare` on each request.  One that raises Fatal becomes an
         error response, the others are returned with their index, so one
         bad request never fails its batch."""
         out: list[Response | None] = [None] * len(reqs)
@@ -521,8 +521,8 @@ class HFBackend(Backend):
 
         Probabilities are NOT renormalised over the set: leakage stays a
         separate number, and a scorer that wants the conditional
-        distribution divides by cand_mass itself.  Right-padded batches;
-        only each row's last position is materialised (`logits_to_keep`
+        distribution divides by cand_mass itself.  Batches are right-padded,
+        and only each row's last position is materialised (`logits_to_keep`
         with the row positions), so a 1k-token prompt over a 150k vocabulary
         does not allocate full logits.  Whether the forward takes
         `logits_to_keep` is read from its signature, a named parameter and
@@ -626,13 +626,13 @@ class HFBackend(Backend):
         log-softmax is taken in fp32 whatever the model's dtype.
 
         A request that fails its own checks (decode params, token boundary)
-        becomes an error response; the rest of the batch is still scored."""
+        becomes an error response, and the rest of the batch is still scored."""
         import torch
 
         def prepare(r: Request) -> tuple[list[int], int]:
             if r.input_ids is not None:
                 raise Fatal("a target with input_ids cannot be checked for a "
-                            "token boundary; give the prompt as messages, or "
+                            "token boundary. Give the prompt as messages, or "
                             "score the continuation as candidates")
             # the request's own params only: a generate backend's decode
             # defaults are not part of a scoring request
@@ -677,12 +677,12 @@ class HFBackend(Backend):
         import torch
         if self.generate:
             # one generate() call decodes every row at reqs[0]'s params, so a
-            # mixed batch must never get here; complete_batch splits it first
+            # mixed batch must never get here: complete_batch splits it first
             sigs = {decode_signature(merge_params(self.default_params, r.params))
                     for r in reqs}
             if len(sigs) > 1:
                 raise AssertionError(
-                    f"internal: _run_batch got {len(sigs)} decode signatures; "
+                    f"internal: _run_batch got {len(sigs)} decode signatures, but "
                     f"mixed batches must be split by complete_batch")
         prompts = [self._render(r) for r in reqs]
         enc = self.tok(prompts, return_tensors="pt", padding=True,

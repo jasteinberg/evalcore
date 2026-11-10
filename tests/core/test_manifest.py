@@ -175,7 +175,7 @@ def test_missing_or_corrupt_manifest_degrades_to_prior_behaviour(tmp_path):
 def test_stale_manifest_reports_unplanned_rows_not_negative_attrition(
         tmp_path):
     """A manifest older than the sink names fewer units than the frame has.
-    Those rows are surfaced as `n_unplanned`; nothing goes negative and no
+    Those rows are surfaced as `n_unplanned`.  Nothing goes negative and no
     missingness is invented."""
     cells = grid({"model": ["m1", "m2"]})
     out = tmp_path / "runs.jsonl"
@@ -223,7 +223,7 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
 
 def test_resume_reads_the_jsonl_not_the_manifest(tmp_path):
     """Deleting the manifest must not cost work.  Resume is by unit_id in the
-    sink; the manifest is rebuilt and no request is re-dispatched."""
+    sink.  The manifest is rebuilt and no request is re-dispatched."""
     cells = grid({"model": ["m1"]})
     its, out = items(6), tmp_path / "runs.jsonl"
     run(list(units(cells, its)), EchoBackend(), out)

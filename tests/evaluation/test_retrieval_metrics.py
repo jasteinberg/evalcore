@@ -13,7 +13,7 @@ L3 = math.log2(3)
 
 
 def test_binary_relevance_by_hand():
-    """R = {a, b, c, z}, z never returned; ranked a x b y c.
+    """R = {a, b, c, z}, z never returned.  Ranking a x b y c.
     recall@1,3,5 = 1/4, 2/4, 3/4.  nDCG@3: DCG = 1/log2 2 + 1/log2 4 = 1.5,
     IDCG = 1 + 1/log2 3 + 1/2, so 1.5 / (1.5 + 1/log2 3)."""
     m = rank_metrics(list("axbyc"), {"a", "b", "c", "z"}, ks=(1, 3, 5))

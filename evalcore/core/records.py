@@ -59,7 +59,7 @@ class SinkState:
     """What a sink already holds, read without opening it for writing:
     for each unit_id its LAST row's request_key (None for rows written
     before request keys existed) and whether that row errored, last-wins
-    as in `to_frame`; plus how many lines could not be read."""
+    as in `to_frame`, plus how many lines could not be read."""
 
     def __init__(self, path: str | Path) -> None:
         self.seen: dict[str, str | None] = {}
@@ -201,7 +201,7 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
     A read-modify-write loses the plan of any concurrent writer: two
     processes sharding one sweep both read the file, both write their own
     union, and the second erases the first -- a silent loss of exactly the
-    evidence this file exists to keep.  Appends never lose a record; at
+    evidence this file exists to keep.  Appends never lose a record.  At
     worst two writers both append the same unit, and `read_manifest`
     deduplicates on the way in.
 
@@ -297,7 +297,7 @@ def to_frame(path: str | Path, drop_errors: bool = False) -> pd.DataFrame:
     rows, bad = read_jsonl(path)
     if bad:
         warnings.warn(
-            f"{str(path)!r}: skipped {bad} unreadable line(s); a write "
+            f"{str(path)!r}: skipped {bad} unreadable line(s). A write "
             f"interrupted by a crash leaves one, and its unit is re-run on "
             f"resume", RuntimeWarning, stacklevel=2)
     if not rows:

@@ -52,7 +52,7 @@ class EmbeddingCache:
     Each `put` writes one .npz chunk holding its keys and vectors together,
     atomically (temp file, then rename), so a killed write leaves either a
     whole chunk or none -- never keys without vectors.  Every chunk is read
-    at open; the store is append-only, and deleting the directory is the
+    at open.  The store is append-only, and deleting the directory is the
     only way to forget.  Safe across threads of one process."""
 
     def __init__(self, root: str | Path) -> None:
@@ -87,7 +87,7 @@ class EmbeddingCache:
 
 
 class Embedder(ABC):
-    """Subclasses define `identity()` and `_embed(texts, role)`; `embed`
+    """Subclasses define `identity()` and `_embed(texts, role)`.  `embed`
     adds the cache, de-duplication and batching."""
 
     batch_size: int = 64
@@ -164,7 +164,7 @@ def _on_device(model: Any, device: Any, enc: Mapping[str, Any]
 def _dtype(model: Any) -> str:
     """The weights' dtype, which changes the vectors (bfloat16 keeps 8
     mantissa bits to float32's 24), so it is part of the identity.  A
-    transformers model has `.dtype`; a bare torch module reports its first
+    transformers model has `.dtype`.  A bare torch module reports its first
     parameter's.  A model with neither is refused rather than given an
     identity that would let two precisions share cache entries."""
     dt = getattr(model, "dtype", None)
@@ -186,7 +186,7 @@ class HFEmbedder(Embedder):
                      which attend only leftwards, so only the last position
                      has seen the whole text)
     prefixes {"query": ..., "document": ...}: an instruction some models are
-             trained with ("query: " / "passage: "); part of the identity.
+             trained with ("query: " / "passage: "), part of the identity.
 
     Texts longer than `max_length` tokens are truncated, counted in
     `n_truncated`, and warned about: the vector then describes a prefix."""
@@ -247,7 +247,7 @@ class HTTPEmbedder(Embedder):
     Written against the providers' API references of 6 Oct 2026 and
     checked live the same day.  OpenAI takes up to 2048 inputs and 300k
     tokens per request and an optional `dimensions` (text-embedding-3 and
-    later); it has no query/document distinction, so both roles get the
+    later).  It has no query/document distinction, so both roles get the
     same vector.  Gemini maps the role to taskType RETRIEVAL_QUERY /
     RETRIEVAL_DOCUMENT.  The reference marks the per-request `taskType`
     and `outputDimensionality` deprecated in favour of `embedContentConfig`,
@@ -257,7 +257,7 @@ class HTTPEmbedder(Embedder):
     so they are sent.  A returned dimension other than the one asked for
     raises, so a setting silently dropped again cannot pass unnoticed.
     Rate limits and 5xx are retried with the backends' policy (honouring
-    Retry-After); anything else raises Fatal."""
+    Retry-After).  Anything else raises Fatal."""
 
     ENV = MappingProxyType({"openai": "OPENAI_API_KEY",
                             "gemini": "GEMINI_API_KEY"})

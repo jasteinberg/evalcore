@@ -88,7 +88,7 @@ def explode_tokens(df: pd.DataFrame,
                                           "meta_target_ids")
                    ) -> pd.DataFrame:
     """One row per (unit, target position) from a frame of teacher-forced
-    rows.  Columns holding per-token lists are exploded together; `position`
+    rows.  Columns holding per-token lists are exploded together.  `position`
     counts from 0 within each unit.  Rows without token lists (errors,
     generations) are dropped, so pass `status == "ok"` rows."""
     cols = [c for c in cols if c in df.columns]
@@ -128,7 +128,7 @@ def _align(d: pd.DataFrame, x: str, item: str, cluster: str,
     values, rows per x indexed by item, the items present at EVERY x, their
     cluster codes, and how many items were dropped for missing a point.
 
-    `d` holds the usable rows; `planned` is the item column of the frame
+    `d` holds the usable rows, and `planned` is the item column of the frame
     BEFORE rows were filtered out, so an item with no usable row anywhere
     (an error at every x) counts as dropped just like one missing a single
     point.  Counting only the items left in `d` would make it vanish.
@@ -137,12 +137,12 @@ def _align(d: pd.DataFrame, x: str, item: str, cluster: str,
     missing cluster label, two rows for one (item, x)."""
     if not pd.api.types.is_numeric_dtype(d[x]):
         raise ValueError(
-            f"axis column {x!r} must be numeric (got {d[x].dtype}); strings "
+            f"axis column {x!r} must be numeric (got {d[x].dtype}). Strings "
             f"would sort as text, so convert it first")
     if cluster in d.columns and d[cluster].isna().any():
         raise ValueError(
-            f"{int(d[cluster].isna().sum())} rows have no {cluster!r} label; "
-            f"every item needs a cluster to be resampled with")
+            f"{int(d[cluster].isna().sum())} rows have no {cluster!r} label. "
+            f"Every item needs a cluster to be resampled with")
     dup = d.duplicated([x, item])
     if dup.any():
         raise ValueError(
@@ -234,7 +234,7 @@ def composition(w: np.ndarray, ok: np.ndarray, valid: np.ndarray,
 
     m = marg(w)
     cm = np.concatenate([np.ones((len(w), 1)), np.cumprod(m, 1)], 1)
-    # A length no drawn item has leaves its marginal NaN; 0 * NaN would
+    # A length no drawn item has leaves its marginal NaN, and 0 * NaN would
     # poison the sum for items that are not in the replicate, so mask them.
     A_pred = np.where(w > 0, w * cm[:, nt], 0.0).sum(1) / W
 
@@ -347,7 +347,7 @@ def curve_caveats(k: int, peak: pd.DataFrame,
       (stats.few_clusters), the percentile interval is too narrow.
     * A censored crossing: replicates whose curve never reaches the level
       are left out of the crossing's interval, so above MAX_CENSORED_SHARE
-      it describes only the replicates that crossed; if the observed curve
+      it describes only the replicates that crossed.  If the observed curve
       itself never crosses, there is no point estimate.
     * A chi peak at an end of the grid: chi there is a one-sided difference
       and the true peak may lie outside the axis.
@@ -365,7 +365,7 @@ def curve_caveats(k: int, peak: pd.DataFrame,
             continue
         share = float(np.mean(~np.isfinite(reps[name])))
         if share > MAX_CENSORED_SHARE:
-            out.append(f"{name}: {share:.0%} of replicates never cross; the "
+            out.append(f"{name}: {share:.0%} of replicates never cross. The "
                        f"interval describes only those that did")
     if pk.get("peak_at_edge", 0.0) == 1.0:
         out.append("chi peaks at an end of the grid: a one-sided difference, "
@@ -392,7 +392,7 @@ def axis_curves(df: pd.DataFrame, x: str, item: str = "item_id",
     chi is taken against log x unless `log_x=False` (an axis that includes
     0, such as a checkpoint step, needs the linear form).  `peak_at_edge`
     is 1 when the chi peak sits on an end of the grid, where chi is a
-    one-sided difference; its interval says how often that happens across
+    one-sided difference.  Its interval says how often that happens across
     replicates.
 
     A quantity can be undefined in a replicate: phi_l, the per-position
@@ -451,7 +451,7 @@ def _tabulate(name: str, xs: np.ndarray, point: Mapping[str, Any],
 def _require_positive(xs: np.ndarray, name: str, log_x: bool) -> None:
     if log_x and (xs <= 0).any():
         raise ValueError(
-            f"{name} has values <= 0, so log {name} is undefined; pass "
+            f"{name} has values <= 0, so log {name} is undefined. Pass "
             f"log_x=False for a linear axis (e.g. one that includes step 0)")
 
 
@@ -463,8 +463,8 @@ def subsampled_sharpness(df: pd.DataFrame, x: str, ms: Sequence[int],
     """Finite-size scaling of the apparent sharpness s_m = max_x chi(x) when
     only m CLUSTERS are scored (m items when every item is its own
     cluster).  Each draw takes m clusters without replacement, the SAME
-    clusters at every x.  Returns mean and sd of s_m over draws for each m;
-    fitting s_m ~ m^theta is left to the caller."""
+    clusters at every x.  Returns mean and sd of s_m over draws for each m.
+    Fitting s_m ~ m^theta is left to the caller."""
     data = axis_data(df, x, item, cluster, ok, n_target)
     _require_positive(data.x, x, log_x)
 
@@ -487,7 +487,7 @@ def subsampled_sharpness(df: pd.DataFrame, x: str, ms: Sequence[int],
 def crossing(x: ArrayLike, y: ArrayLike, level: float = 0.0,
              log: bool = True) -> np.ndarray:
     """First x at which the curve y(x) crosses `level`, by linear
-    interpolation in u = log x (or x).  `y` is (n_x,) or (B, n_x); a curve
+    interpolation in u = log x (or x).  `y` is (n_x,) or (B, n_x).  A curve
     that never reaches the level returns NaN (censored), never an end
     point."""
     u = np.log(np.asarray(x, float)) if log else np.asarray(x, float)
@@ -543,7 +543,7 @@ def value_curves(df: pd.DataFrame, x: str, value: str,
     one with an item-paired percentile interval (see the module docstring).
 
     For a crossing, `crossing_<level>_censored` reports the share of
-    replicates whose curve never reaches the level; a large share means
+    replicates whose curve never reaches the level.  A large share means
     the interval describes only the replicates that did cross."""
     data = value_data(df, x, value, item, cluster)
     _require_positive(data.x, x, log_x)

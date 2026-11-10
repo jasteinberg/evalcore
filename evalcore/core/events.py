@@ -11,12 +11,12 @@ line, each with a wall-clock time `t` (ISO 8601, UTC) and `event`:
     run_end     units done, errors, elapsed, cache hits / misses
 
 A run killed partway has a run_start and no run_end, which `summarize`
-reports.  The human-readable progress lines are unchanged; this file is
+reports.  The human-readable progress lines are unchanged.  This file is
 for asking questions afterwards ("why did the sweep take nine hours",
 "which errors, how many, since when") without reading them.
 
-`read_events` returns the log as a frame for arbitrary queries;
-`summarize_events` answers the usual questions in one call; `parse_log`
+`read_events` returns the log as a frame for arbitrary queries.
+`summarize_events` answers the usual questions in one call.  `parse_log`
 turns a foreign text log into the same kind of frame with named-group
 regexes, so another tool's output can be queried the same way.
 """
@@ -82,7 +82,7 @@ def summarize_events(path: str | Path, prices: Mapping[str, float] | None = None
     """The usual questions about a run, answered from its event log.
 
     `prices` = {"in": $ per 1M input tokens, "out": $ per 1M output tokens}
-    adds a cost line; nothing is priced by default.  A gap of more than
+    adds a cost line.  Nothing is priced by default.  A gap of more than
     `stall_s` seconds between consecutive unit events is reported as a
     stall."""
     ev = read_events(path)
@@ -161,7 +161,7 @@ def parse_log(path: str | Path, patterns: Mapping[str, str],
               time_format: str | None = None) -> pd.DataFrame:
     """A foreign text log as an events frame.
 
-    `patterns` maps an event name to a regex with named groups; a line
+    `patterns` maps an event name to a regex with named groups.  A line
     matching it becomes {"event": name, **groups}, numeric-looking groups
     are converted, and a group named `t` is parsed as the time (with
     `time_format`, or pandas' parser).  Lines matching no pattern are

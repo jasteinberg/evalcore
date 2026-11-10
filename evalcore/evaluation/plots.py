@@ -1,11 +1,11 @@
 """Four plots.  Each one exists to make a specific error visible.
 
 * ci_plot        -- a metric across the grid, with the interval, never a bar.
-* forest         -- paired differences; the zero line is the whole figure.
-* paired_scatter -- per-item A vs B against y = x; shows whether a mean
+* forest         -- paired differences.  The zero line is the whole figure.
+* paired_scatter -- per-item A vs B against y = x, which shows whether a mean
                     difference is a uniform shift or a few items moving,
                     which the mean and its CI cannot distinguish.
-* deff_curve     -- n_eff against rows per cluster; shows augmentation
+* deff_curve     -- n_eff against rows per cluster, which shows augmentation
                     saturating.
 """
 

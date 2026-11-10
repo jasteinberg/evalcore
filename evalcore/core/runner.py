@@ -20,7 +20,7 @@ Design commitments, each of which is a lesson rather than a preference:
   changing a metric costs a re-score over cached responses, not a re-run.
 * Every row has a `status`: ok, error, truncated or unparsed.  Only `ok`
   rows carry metrics.  A truncated response (the generation hit its token
-  budget) is not scored, because a cut-off answer is not an answer; a
+  budget) is not scored, because a cut-off answer is not an answer.  A
   scorer that cannot read an answer raises `ParseFailure`, because a parse
   failure is a fault of the eval, not a wrong answer by the model.  Both
   are excluded from the metric and counted in `attrition`, never folded
@@ -104,7 +104,7 @@ class ParseFailure(ValueError):
 @dataclass
 class Plan:
     """The resume decisions for one invocation, made without calling the
-    model.  `execute` runs `todo`; a dry run reports it."""
+    model.  `execute` runs `todo`, and a dry run reports it."""
 
     units: list[Unit]
     keys: dict[str, str]              # unit_id -> request_key
@@ -181,7 +181,7 @@ def _refuse_clashes(units: Sequence[Unit]) -> None:
         if seen.setdefault(u.id, content) != content:
             raise ValueError(
                 f"item_id {it.item_id!r} names two different items (payload, "
-                f"group or parent differ); item ids must be unique, or one "
+                f"group or parent differ). Item ids must be unique, or one "
                 f"item's rows would silently replace the other's")
         names.update(u.cell.params, u.cell.tags)
     bad = sorted(n for n in names
@@ -189,7 +189,7 @@ def _refuse_clashes(units: Sequence[Unit]) -> None:
     if bad:
         raise ValueError(
             f"cell param/tag name(s) {bad} clash with columns the runner "
-            f"writes ({sorted(RUNNER_COLUMNS)} and meta_*); rename them")
+            f"writes ({sorted(RUNNER_COLUMNS)} and meta_*). Rename them")
 
 
 def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
@@ -197,13 +197,13 @@ def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
         print(f"[run] {msg}", file=stream, flush=True)
     if p.unreadable:
         say(f"WARNING {p.unreadable} unreadable line(s) in {str(out)!r} (a "
-            f"write interrupted by a crash?); their units will be re-run")
+            f"write interrupted by a crash?). Their units will be re-run")
     if p.stale:
         say(f"{p.stale} finished units were made from a different request "
-            f"(prompt, item, backend or its defaults changed); re-running "
+            f"(prompt, item, backend or its defaults changed). Re-running "
             f"them, and the new rows supersede the old")
     if p.retried:
-        say(f"{p.retried} units errored last time; retrying them "
+        say(f"{p.retried} units errored last time. Retrying them "
             f"(retry_errors=False keeps error rows as final)")
     say(f"{len(p.units)} units, {p.done} already done, {len(p.todo)} to go")
 
@@ -324,7 +324,7 @@ def _sidecar(ctx: _Context, rkey: str) -> str:
     f = ctx.store.path(rkey)
     if not f.exists():
         raise FileNotFoundError(
-            f"array sidecar {str(f)!r} for request {rkey} is missing; the "
+            f"array sidecar {str(f)!r} for request {rkey} is missing. The "
             f"cache entry refers to it, so the cache directory was edited")
     return os.path.relpath(f, ctx.out.parent)
 
@@ -388,7 +388,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
 
     workers x batch_size is the concurrency knob.  HTTP: workers=8..16,
     batch_size=1.  Local HF: workers=1, batch_size=8..32 (one process owns
-    the device; threads would only contend for it).
+    the device, and threads would only contend for it).
 
     The plan is written to `manifest` (default: a sibling of `out`) BEFORE
     the first call, so a sweep killed midway is still accountable -- pass
@@ -407,7 +407,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     ctx = _Context(
         backend, render, score, p.keys, out, JsonlSink(out),
         # sidecars live with the cache when there is one, so a cache hit in
-        # another run finds them; otherwise beside the sink
+        # another run finds them, and otherwise beside the sink
         ArrayStore(cache.root / "arrays" if cache and cache.enabled
                    else Path(str(out) + ".arrays")),
         cache, EventLog(events_path(out)) if events else None,
@@ -454,6 +454,6 @@ def _finish(ctx: _Context, mpath: Path | None) -> None:
         never = len({r["unit_id"] for r in _read_records(mpath)}
                     - ctx.sink.seen.keys())
         if never:
-            print(f"[run] WARNING {never} planned units were never attempted; "
-                  f"pass manifest={str(mpath)!r} to attrition()",
+            print(f"[run] WARNING {never} planned units were never attempted. "
+                  f"Pass manifest={str(mpath)!r} to attrition()",
                   file=ctx.stream, flush=True)

@@ -27,7 +27,7 @@ from evalcore.evaluation.curves import (
 from evalcore.testing import assert_same
 
 pytestmark = pytest.mark.filterwarnings(
-    # small fixtures by design; the caveats themselves are tested at the end
+    # small fixtures by design. The caveats themselves are tested at the end
     "ignore:curves carry caveats:RuntimeWarning")
 
 
@@ -55,8 +55,8 @@ HAND = [[1], [0], [1, 1], [1, 0], [0, 1], [1, 1]]
 def test_composition_by_hand():
     """A_obs = 3/6.  Pooled marginals m0 = 4/6, m1 = 3/4, so
     A_pred = (2 (2/3) + 4 (2/3)(3/4)) / 6 = 5/9 and phi = -1/18.
-    Length classes: f1 = 1/3, a_S = 1/2; f2 = 2/3, b1 = b2 = 3/4, so
-    A_pred_lc = 1/6 + (2/3)(9/16) = 13/24, phi_lc = -1/24,
+    Length classes: f1 = 1/3 with a_S = 1/2, and f2 = 2/3 with b1 = b2 = 3/4,
+    so A_pred_lc = 1/6 + (2/3)(9/16) = 13/24, phi_lc = -1/24,
     phi_2 = 2/4 - 9/16 = -1/16.  Tokens: 7 of 10 correct."""
     d = axis_data(frame({1.0: HAND, 2.0: HAND}), "x")
     c = composition(np.ones(6), d.ok[0], d.valid[0], d.nt[0])
@@ -126,7 +126,7 @@ def logistic_items(k, xs, rng, slope=3.0, centre=CENTRE):
 
 def test_chi_interval_covers_the_true_finite_difference():
     """Coverage at the true peak, 95% nominal.  R = 120 datasets: binomial
-    SE of the coverage is 0.02; the band is -2.5/+2 SE."""
+    SE of the coverage is 0.02.  The band is -2.5/+2 SE."""
     xs = np.geomspace(1e8, 1e10, 7)
     R, hits = 120, 0
     for s in range(R):
@@ -147,7 +147,7 @@ def test_chi_standard_error_matches_the_paired_closed_form():
         paired:    Var = d (1 - d) / k,             d = A_{j+1} - A_{j-1},
         unpaired:  Var = [A_{j+1}(1 - A_{j+1}) + A_{j-1}(1 - A_{j-1})] / k,
 
-    each divided by (2h)^2.  The bootstrap SE must match the first; with
+    each divided by (2h)^2.  The bootstrap SE must match the first.  With
     the pairing destroyed (items reshuffled at each x) it must match the
     second.  Dense grid, so the gain is large, as for checkpoints."""
     k = 2000
@@ -165,7 +165,7 @@ def test_chi_standard_error_matches_the_paired_closed_form():
     shuffled = {x: [ok[i] for i in rng.permutation(len(ok))]
                 for x, ok in ok_by_x.items()}
     unpaired = axis_curves(frame(shuffled), "x", n_boot=1000)
-    # sd of a bootstrap sd from 1000 replicates is ~2.2%; 10% is ~4.5 sd
+    # sd of a bootstrap sd from 1000 replicates is ~2.2%, so 10% is ~4.5 sd
     assert paired.reps["chi_obs"][:, j].std() == pytest.approx(se_paired,
                                                                rel=0.10)
     assert unpaired.reps["chi_obs"][:, j].std() == pytest.approx(
@@ -235,7 +235,7 @@ def test_subsampled_sharpness_shrinks_its_spread_with_m():
 
 
 def test_explode_tokens():
-    """Lists explode together with a per-unit position; ndarray cells (a
+    """Lists explode together with a per-unit position, and ndarray cells (a
     parquet round trip) and a repeated index (a concat of frames) give the
     same positions."""
     df = pd.DataFrame({"unit_id": ["a", "b"], "meta_logp": [[-0.1, -2.0], [-0.5]],
@@ -329,7 +329,7 @@ def test_value_curves_by_hand():
 def test_crossing_interval_covers_the_population_crossing():
     """y_ix = (ln x - c) + a_i + e_ix with E[a] = 0: the population mean
     curve crosses 0 at x = e^c.  R = 100: binomial SE of the coverage is
-    0.022; the band is about -2.3/+1.8 SE."""
+    0.022.  The band is about -2.3/+1.8 SE."""
     c, xs = np.log(50.0), np.geomspace(5, 500, 7)
     R, hits = 100, 0
     for s in range(R):
@@ -412,7 +412,7 @@ def test_a_peak_at_the_grid_edge_is_flagged():
 
 @pytest.mark.filterwarnings("ignore:.*items are not scored:RuntimeWarning")
 def test_c6_an_item_failing_everywhere_is_counted():
-    """C6.  Four items at x = 1, 2; item i3 is an error row at both points.
+    """C6.  Four items at x = 1, 2.  Item i3 is an error row at both points.
     It is planned and absent from the paired analysis, exactly like an item
     missing at one point, so n_dropped = 1 (three items analysed)."""
     oks = [[1], [0], [1, 1], [1, 0]]
@@ -427,7 +427,7 @@ def test_c6_an_item_failing_everywhere_is_counted():
 def test_c22_value_curves_resample_whole_clusters():
     """C22.  Duplicate every item into two rows of one cluster (ids c000a,
     c000b in cluster c000).  The cluster means, and so the mean curve, are
-    unchanged; a bootstrap over the 150 clusters draws the same cluster
+    unchanged.  A bootstrap over the 150 clusters draws the same cluster
     weights from the same seed, and doubling every weight cancels in
     sum w V / sum w.  So every replicate of the twin table equals the
     single table's.  Resampling items instead would draw 300 independent
@@ -449,11 +449,11 @@ def test_c22_value_curves_resample_whole_clusters():
 def test_c25_phi_lc_interval_width_matches_the_sampling_spread():
     """C25.  The bootstrap sd of phi_lc must estimate its true sampling sd.
     Truth by simulation: R = 200 independent datasets of 300 items from one
-    process (odd items length 1, p = 0.6; even items length 2 with
+    process (odd items length 1 with p = 0.6, even items length 2 with
     c2 = c1 half the time, so phi_2 = Cov(c1, c2) = 0.5 Var(c1) = 0.105).
     The across-dataset sd of the point phi_lc has relative SE
-    1/sqrt(2(R - 1)) = 0.050; the mean over datasets of the replicate sd
-    (B = 200 each) has a much smaller one.  15% is 3 SE."""
+    1/sqrt(2(R - 1)) = 0.050, while the mean over datasets of the replicate
+    sd (B = 200 each) has a much smaller one.  15% is 3 SE."""
     R, k, pts, sds = 200, 300, [], []
     for s in range(R):
         rng = np.random.default_rng(7000 + s)
@@ -478,7 +478,7 @@ def test_c26_linear_axis_chi_is_exact():
     gives chi = 0.01 at every point, on a grid including x = 0 where the log
     form is undefined.  Through the full analyses: 100 single-token items,
     item i right at x iff i < x, so A(x) = x/100 exactly on x in
-    {0, 10, 30, 70}; and a per-item value 0.01 x.  Tolerance 1e-12
+    {0, 10, 30, 70}, plus a per-item value 0.01 x.  Tolerance 1e-12
     absolute: rounding in differences of O(1) numbers."""
     x = np.array([0.0, 1, 3, 7, 20])
     assert_same(susceptibility(x, 0.01 * x, log=False), np.full(5, 0.01),
@@ -499,7 +499,7 @@ def test_c28_axis_curves_reports_the_nan_replicate_share():
     probability (1 - 1/40)^40 = 0.3632.  The interval of phi_l3 then
     describes only 64% of replicates, so the share must be reported, as
     value_curves does for a crossing (`<name>_censored`).  B = 1000:
-    binomial SE of the share is 0.015; tolerance 0.05 is 3.3 SE."""
+    binomial SE of the share is 0.015, so tolerance 0.05 is 3.3 SE."""
     rng = np.random.default_rng(0)
     oks = [[int(rng.random() < 0.5)] for _ in range(39)] + [[1, 0, 1]]
     res = axis_curves(frame({1.0: oks, 2.0: oks}), "x", n_boot=1000)

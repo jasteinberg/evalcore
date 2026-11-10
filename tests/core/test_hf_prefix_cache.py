@@ -12,7 +12,7 @@ over cached keys, matmuls over a shorter sequence), not the arithmetic.
 Under round-to-nearest the error of a length-k sum grows like
 sqrt(k) * eps * (scale) for random-sign rounding.  Here float32
 eps = 2^-23, the longest inner sum is k <= 2 * WIDTH = 128 (the MLP's
-inner width; attention sums run over T <= 2 * WIDTH positions, checked
+inner width, while attention sums run over T <= 2 * WIDTH positions, checked
 below), and there is one such error per layer plus the head.  A quantity of
 magnitude <= S read after the model's layers may then move by at most about
 
@@ -89,7 +89,7 @@ class ReadPatch(Probe):
     contract.  On the first forward of each call it reads layer BLOCK's
     output and lm_head's input at the read position, then (if the request
     has params["patch"] = alpha) adds alpha * DIRECTION to layer BLOCK's
-    output there; with params["patch_every"] also at every generated token.
+    output there, and with params["patch_every"] also at every generated token.
     The read happens before the patch is added."""
 
     calls_per_forward = None                 # generate runs several forwards
@@ -240,7 +240,7 @@ def test_a_patched_call_leaves_no_trace_in_the_stored_prefix(model, path,
 def test_k_slots_keep_interleaved_prefixes_apart(model):
     """Prompts A, B, A', B' where A' extends A, B' extends B, and A and B
     share a header H.  With two slots each extension reuses its own prompt
-    (len - 1 positions); with one slot B evicts A, so A' reuses only H.
+    (len - 1 positions).  With one slot B evicts A, so A' reuses only H.
     Every result also equals a full pass."""
     tok = CharTok()
     H = "rules: be brief.\n"

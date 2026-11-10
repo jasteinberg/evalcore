@@ -54,7 +54,7 @@ class Task:
 
     def run(self, cells: Iterable[Cell], backend: Backend, out: str | Path,
             repeats: int = 1, **kw: Any) -> pd.DataFrame:
-        """`runner.execute` over this task's units; keyword arguments pass
+        """`runner.execute` over this task's units.  Keyword arguments pass
         through (cache, workers, batch_size, resume, ...)."""
         return execute(self.units(cells, repeats), backend, self.render,
                    self.score, out, **kw)

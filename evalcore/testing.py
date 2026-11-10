@@ -54,7 +54,7 @@ def _num_close(x: float, y: float, rtol: float, atol: float) -> bool:
 def mismatches(a: Any, b: Any, rtol: float = 0.0, atol: float = 0.0,
                path: str = "root") -> list[str]:
     """Every place where `a` and `b` differ beyond the tolerance, as
-    "path: description" strings; empty when they agree."""
+    "path: description" strings, empty when they agree."""
     out: list[str] = []
     _walk(a, b, rtol, atol, path, out)
     return out

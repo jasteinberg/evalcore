@@ -150,7 +150,8 @@ def test_graded_end_to_end(tmp_path, mode):
         assert (numeric["correct"] == 0.0).all()
     else:
         unparsed = t[t["status"] == "unparsed"]
-        # every closed-form type is unreadable; abstain cannot be "unreadable"
+        # every closed-form type is unreadable, but abstain cannot be
+        # "unreadable"
         assert set(unparsed["group"]) >= {"count", "slowest", "parent",
                                           "any_fail", "failed_ids"}
         assert unparsed["correct"].isna().all()
@@ -189,7 +190,7 @@ def _spans(item):
 def test_d9_fmt_axis_is_paired(position):
     """D9.  Invariance: fmt only re-serialises a trace, so json and log
     under one seed hold the same 20 traces (every span's name, times and
-    status, parsed from each text independently); with position unset the
+    status, parsed from each text independently).  With position unset the
     item ids and golds are equal too."""
     a = log_qa_items(n_traces=20, fmt="json", n_spans=10, seed=3,
                      position=position)

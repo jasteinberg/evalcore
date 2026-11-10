@@ -7,10 +7,10 @@ An `Experiment` holds what the experiment is (task, backend, cells,
 repeats) and how to run it (`RunOptions`).  Each stage is a plain function
 field with one signature, `stage(exp, res) -> None`: it reads what earlier
 stages put in `res` and adds its own.  Replace a stage by passing a
-function; switch it off with None (`execute=None` re-analyses an existing
-sink without calling the model).  A stage may halt the run by setting
-`res.halted` -- the dry run does, over budget -- and the report is still
-written, so a halted run is documented too.
+function, or switch it off with None (`execute=None` re-analyses an
+existing sink without calling the model).  A stage may halt the run by
+setting `res.halted` -- the dry run does, over budget -- and the report is
+still written, so a halted run is documented too.
 
 What the analyse stage computes is itself pluggable: `analyses` maps a
 name to any `analysis(frame, ctx) -> table` (analyses.py has the usual
@@ -69,7 +69,7 @@ class RunOptions:
     calibration_max_age_h: float = 24.0
     prices: dict[str, float] | None = None  # $ per 1M tokens: {"in", "out"}
     max_cost: float | None = None           # dry run halts above this, or
-    confirm: bool = False                   # when it cannot estimate; unless
+    confirm: bool = False                   # when it cannot estimate, unless
                                             # confirmed.  Needs prices.
     dry_run_only: bool = False
 
@@ -97,12 +97,12 @@ class Results:
 def calibrate_stage(exp: Experiment, res: Results) -> None:
     """Measure the backend on the experiment's own requests -- interleaved
     across cells -- or reuse a saved calibration of the same backend
-    identity that is fresh enough; then derive run settings.  Explicit
+    identity that is fresh enough, then derive run settings.  Explicit
     RunOptions win over derived ones, and the record says which applied."""
     path = exp.path("calibration.json")
     cal = None if exp.options.recalibrate else _saved_calibration(exp, path)
     if cal is None:
-        # interleaved across cells, so every cell's prompts are sampled; a
+        # interleaved across cells, so every cell's prompts are sampled.  A
         # local model needs enough requests for its batch-size ladder
         by_cell: dict[str, list[Unit]] = {}
         for u in exp.units():
@@ -166,11 +166,11 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     if budgeted and to_call and "est_cost" not in d:
         res.halted = (f"max_cost ${o.max_cost:.2f} cannot be checked: the "
                       f"calibration measured no token counts for "
-                      f"{exp.backend.name}; rerun with confirm=True to proceed "
+                      f"{exp.backend.name}. Rerun with confirm=True to proceed "
                       f"unbudgeted")
     elif budgeted and d.get("est_cost", 0.0) > o.max_cost:
         res.halted = (f"estimated cost ${d['est_cost']:.2f} exceeds max_cost "
-                      f"${o.max_cost:.2f}; rerun with confirm=True to proceed")
+                      f"${o.max_cost:.2f}. Rerun with confirm=True to proceed")
     elif o.dry_run_only:
         res.halted = "dry run only"
 
@@ -254,18 +254,18 @@ class Experiment:
         if not self.cells or not self.task.items:
             raise ValueError("an experiment needs at least one cell and one item")
         if self.metric is not None and self.analyses is not None:
-            raise ValueError("give metric (shorthand) or analyses, not both; "
-                             "add summary(metric) to analyses instead")
+            raise ValueError("give metric (shorthand) or analyses, not both. "
+                             "Add summary(metric) to analyses instead")
         o = self.options
         # with execute off nothing is spent, so there is no budget to check
         budgeted = o.max_cost is not None and self.execute is not None
         if budgeted and not o.prices:
             raise ValueError("max_cost needs prices ({'in', 'out'}: $ per 1M "
-                             "tokens); without them the budget cannot be "
+                             "tokens). Without them the budget cannot be "
                              "checked")
         if budgeted and (self.calibrate is None or self.dry_run is None):
             raise ValueError("max_cost is checked by the dry run against the "
-                             "calibration; with the calibrate or dry_run "
+                             "calibration. With the calibrate or dry_run "
                              "stage off the budget cannot be checked")
         # a request the backend cannot serve fails here, before any spend:
         # every unit's, since one item with a target among plain ones
@@ -282,7 +282,7 @@ class Experiment:
             more = (f" ({len(refused)} distinct reasons)" if len(refused) > 1
                     else "")
             raise ValueError(f"{n} of {len(all_units)} requests cannot be "
-                             f"served{more}; e.g. unit {ids[0]}: {problem}")
+                             f"served{more}, e.g. unit {ids[0]}: {problem}")
 
     def units(self) -> list[Unit]:
         return self.task.units(self.cells, self.repeats)
@@ -332,10 +332,10 @@ class Experiment:
         still changes the job.  The request keys cover each rendered prompt
         (a template edit with no version bump), the backend's identity and
         defaults, and the repeat index.  batch_size enters because padding
-        can change a local model's numerics; limit because it changes which
-        units are planned.  Workers, retries, caching and the code commit do
-        not: they change how a result is obtained, not what it is (the
-        commit is recorded in the marker)."""
+        can change a local model's numerics, and limit because it changes
+        which units are planned.  Workers, retries, caching and the code
+        commit do not: they change how a result is obtained, not what it is
+        (the commit is recorded in the marker)."""
         o = self.options
         keys = sorted(request_key(rendered(self.task.render, u), u.repeat,
                                   self.backend)
@@ -350,7 +350,7 @@ class Experiment:
             "requests": digest(keys)})
 
     def run(self) -> Results:
-        """Run every enabled stage in order; after a halt, only the report.
+        """Run every enabled stage in order, and after a halt only the report.
 
         Completion marking: `<sink>.done` records the job hash and a status.
         If it already holds this job's hash with status "complete" and

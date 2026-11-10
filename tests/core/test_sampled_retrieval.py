@@ -86,7 +86,7 @@ def test_noise_is_standard_gumbel():
 
 
 def test_beta_inf_is_the_base_ranking_with_its_tie_rule():
-    """Equal scores a = b = 1 order by id; written out by hand."""
+    """Equal scores a = b = 1 order by id (written out by hand)."""
     base = Fixed({"a": 1.0, "b": 1.0, "c": 0.5, "d": 2.0})
     r = SampledRetriever(base, math.inf, seed=0)
     want = [("d", 2.0), ("a", 1.0), ("b", 1.0)]
@@ -177,7 +177,7 @@ def test_bm25_zero_score_documents_are_in_the_population():
 
 
 def test_bm25_score_all_keeps_zeros_and_matches_by_hand():
-    """Columns in id order; only d1 contains "cat", so the rest are 0."""
+    """Columns in id order.  Only d1 contains "cat", so the rest are 0."""
     ids, S = BM25(_DOCS).score_all(["cat", "zzz"])
     assert ids == ["d1", "d2", "d3", "d4"] and S.shape == (2, 4)
     assert S[0, 0] > 0 and S[0, 1:].tolist() == [0, 0, 0]
@@ -301,7 +301,7 @@ def test_backend_keeps_request_order_across_mixed_repeats():
 
 
 def test_reranker_passes_repeat_to_its_first_stage():
-    """A constant scorer keeps the first stage's candidates; the reranker
+    """A constant scorer keeps the first stage's candidates, and the reranker
     then orders them by id, so its output is the sorted first-stage set."""
     first = SampledRetriever(Fixed(FLAT), 1.0, seed=0)
     rr = Reranker(first, FunctionScorer(lambda q, ds: [0.0] * len(ds),

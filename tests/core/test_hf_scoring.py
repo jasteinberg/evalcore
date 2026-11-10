@@ -143,7 +143,7 @@ def test_a_probe_in_scoring_mode_is_told_the_layout():
 
 
 def test_backend_decode_defaults_do_not_block_scoring():
-    """Defaults set for generation are not part of a scoring request; only
+    """Defaults set for generation are not part of a scoring request.  Only
     decode keys the REQUEST carries are refused."""
     tok = CharTok(MERGES)
     be = HFBackend(ToyLM(len(tok.vocab)), tok, device="cpu", generate=True,

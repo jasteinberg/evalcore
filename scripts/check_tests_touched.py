@@ -25,7 +25,7 @@ from collections.abc import Sequence
 
 
 def untested(changed: Sequence[str]) -> list[str]:
-    """Library files among `changed`, if no file under tests/ changed;
+    """Library files among `changed`, if no file under tests/ changed,
     else an empty list.  Paths are repo-relative with forward slashes."""
     src = [f for f in changed if f.startswith("evalcore/") and f.endswith(".py")]
     if any(f.startswith("tests/") for f in changed):

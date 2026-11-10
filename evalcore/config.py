@@ -11,7 +11,7 @@
      "stages":  {"calibrate": false}}
 
 The grid holds only what the backend reads: an HTTP backend reads "model"
-from the params, so there "grid": {"model": [...]} is a real axis; a local
+from the params, so there "grid": {"model": [...]} is a real axis.  A local
 HF backend has its model loaded, so its name is a label, in "tags" (a column
 in every row, outside the cell id, so renaming it costs no re-run).
 
@@ -24,7 +24,7 @@ name with its keys.  The built-ins:
   backend   http (flavour, default_params, base_url, timeout), hf (model,
             revision, dtype, device, generate, default_params), echo,
             retriever (retriever, k)
-  score     graded (the items' graders; the default), ranked (ks),
+  score     graded (the items' graders, the default), ranked (ks),
             teacher_forced
   retriever bm25, dense (embedder, index, cache_dir), rerank (first,
             pair_scorer, depth)
@@ -41,15 +41,15 @@ Top-level keys:
   repeats                        default 1
   score                          how rows are scored, if not the task's own
   metric | analyses              "metric": "correct" is shorthand for
-                                 attrition + summary; "analyses" is
+                                 attrition + summary, and "analyses" is
                                  {name: analysis spec}
   agent                          {"max_turns", "max_tool_calls"}, used when
                                  the task brings tools
   search                         {"retriever": R, "k": 3}: the agent's
                                  search tool over the task's corpus
   options                        RunOptions fields
-  stages                         {stage: false} switches a stage off;
-                                 {stage: spec} replaces it with a
+  stages                         {stage: false} switches a stage off,
+                                 and {stage: spec} replaces it with a
                                  registered stage
   plugins                        modules or .py files to import first, so
                                  their @register factories exist
@@ -108,8 +108,8 @@ def _check(section: Mapping[str, Any], allowed: set[str], where: str,
            required: Sequence[str] = ()) -> None:
     unknown = set(section) - allowed
     if unknown:
-        raise ConfigError(f"{where}: unknown key(s) {sorted(unknown)}; "
-                          f"allowed: {sorted(allowed)}")
+        raise ConfigError(f"{where}: unknown key(s) {sorted(unknown)}. "
+                          f"Allowed: {sorted(allowed)}")
     for key in required:
         if key not in section:
             raise ConfigError(f"{where}: '{key}' is required")
@@ -147,7 +147,7 @@ def _corpus(path: str) -> dict[str, str]:
 def _file_task(path: str, name: str | None = None,
                mapping: Mapping[str, Any] | None = None,
                corpus: str | None = None) -> TaskSpec:
-    """Canonical (or, with `mapping`, foreign) JSONL; `corpus` is a JSONL
+    """Canonical (or, with `mapping`, foreign) JSONL.  `corpus` is a JSONL
     of {"id", "text"} for tasks scored by retrieval or searched by tool."""
     return TaskSpec(Task.from_file(path, name, mapping),
                     _corpus(corpus) if corpus is not None else None)
@@ -228,7 +228,7 @@ def _ranked(ks: Sequence[int], *, task: TaskSpec) -> Any:
                if "gold_docs" not in it.payload]
     if missing:
         raise ConfigError(f"score: {len(missing)} item(s) have no 'gold_docs' "
-                          f"(e.g. {missing[0]!r}); ranked scoring needs them")
+                          f"(e.g. {missing[0]!r}), and ranked scoring needs them")
     return score_ranked(ks=ks)
 
 
@@ -365,7 +365,7 @@ def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
         if s is False:
             out[name] = None
         elif s is True:
-            raise ConfigError(f"stages.{name}: true is the default; give "
+            raise ConfigError(f"stages.{name}: true is the default. Give "
                               f"false (off) or a registered stage")
         else:
             out[name] = build("stage", s, f"stages.{name}")
@@ -386,7 +386,7 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
     backend: Backend = build("backend", cfg["backend"], "backend", task=ts)
     retrieving = isinstance(backend, RetrieverBackend)
     if retrieving and "score" not in cfg:
-        raise ConfigError('score: a retriever backend is scored by ranking; '
+        raise ConfigError('score: a retriever backend is scored by ranking, so '
                           'give "score": {"type": "ranked", "ks": [...]}')
     task = (replace(ts.task, score=build("score", cfg["score"], "score",
                                          task=ts))

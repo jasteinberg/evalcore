@@ -24,8 +24,8 @@ def test_c36_plots_draw_the_interval_and_the_cluster_means():
     from 0.2 to 0.9 (a symmetric bar, or swapped half-widths, would give
     0.1..0.8).  ci_plot draws it vertically at x = 0, forest horizontally
     at y = 0.  paired_scatter plots one point per cluster at (mean B,
-    mean A): cluster c0 has A rows 0, 1 and B rows 1, 1, 0, so (2/3, 1/2);
-    cluster c1 has A 1 and B 0, 1, so (1/2, 1).  Values read back from the
+    mean A): cluster c0 has A rows 0, 1 and B rows 1, 1, 0, so (2/3, 1/2).
+    Cluster c1 has A 1 and B 0, 1, so (1/2, 1).  Values read back from the
     Axes (Agg backend, no pyplot figure).  Tolerance 1e-12: float
     arithmetic on the half-widths 0.3 and 0.4."""
     summ = pd.DataFrame({"condition": ["m"], "point": [0.5], "lo": [0.2], "hi": [0.9]})

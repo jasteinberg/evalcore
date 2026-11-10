@@ -85,7 +85,7 @@ METHODS = ("bca", "percentile")
 
 def _check_method(method: str) -> None:
     if method not in METHODS:
-        raise ValueError(f"unknown method {method!r}; use one of {METHODS}")
+        raise ValueError(f"unknown method {method!r}. Use one of {METHODS}")
 
 
 def _require_clusters(df: pd.DataFrame, value: str, cluster: str) -> None:
@@ -97,7 +97,7 @@ def _require_clusters(df: pd.DataFrame, value: str, cluster: str) -> None:
     lost = int((df[value].notna() & df[cluster].isna()).sum())
     if lost:
         raise ValueError(
-            f"{lost} row(s) carry {value!r} but no {cluster!r} label; every "
+            f"{lost} row(s) carry {value!r} but no {cluster!r} label. Every "
             f"row must belong to a cluster (a source item and what was "
             f"derived from it)")
 
@@ -213,8 +213,9 @@ def paired_bootstrap(df: pd.DataFrame, value: str, condition: str, a: str, b: st
 
     This is also why "the two CIs overlap" is NOT a test.  For independent
     conditions with equal SE, 95% intervals stop overlapping only around
-    p ~ 0.006; for paired conditions the overlap criterion ignores r entirely and
-    can be arbitrarily conservative.  Always report the difference's own CI.
+    p ~ 0.006.  For paired conditions the overlap criterion ignores r
+    entirely and can be arbitrarily conservative.  Always report the
+    difference's own CI.
 
     A cluster only one condition saw has no D_i, so it cannot enter (4).  Its rows
     are left out of `n_rows` (which counts the rows behind the k
@@ -264,7 +265,7 @@ def icc1(df: pd.DataFrame, value: str, cluster: str = "cluster") -> dict:
         m_0  = (N - sum_i m_i^2 / N) / (k - 1)          [balanced: m_0 = m]
         s2_a = (MS_b - MS_w) / m_0,     rho = s2_a / (s2_a + MS_w)
 
-    m_0 is the variance-matched cluster size; it reduces to m when the
+    m_0 is the variance-matched cluster size.  It reduces to m when the
     design is balanced and is what belongs in DEFF when it is not.
     rho is clipped at 0 -- a negative moment estimate means the between-
     cluster variance is not resolved by this much data, not that it is
@@ -292,7 +293,7 @@ def icc1(df: pd.DataFrame, value: str, cluster: str = "cluster") -> dict:
 
 def effective_n(df: pd.DataFrame, value: str,
                 cluster: str = "cluster") -> dict:
-    """DEFF = 1 + (m0 - 1) rho and n_eff = N / DEFF; see eq. (3)."""
+    """DEFF = 1 + (m0 - 1) rho and n_eff = N / DEFF.  See eq. (3)."""
     o = icc1(df, value, cluster)
     if o["N"] == o["k"]:
         # No within-cluster replication: rho is not identifiable, but the
@@ -353,7 +354,7 @@ def benjamini_hochberg(p: Sequence[float], q: float = 0.05) -> np.ndarray:
 
 
 def holm(p: Sequence[float], alpha: float = 0.05) -> np.ndarray:
-    """Holm-Bonferroni step-down; controls FWER, no independence assumed."""
+    """Holm-Bonferroni step-down.  Controls FWER, no independence assumed."""
     pv = np.asarray(p, dtype=float)
     m = pv.size
     order = np.argsort(pv)
@@ -373,16 +374,16 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
               floor_units: str = "rate",
               higher_is_better: bool = True) -> pd.DataFrame:
     """One row per grid cell: point estimate, cluster-bootstrap CI, and the
-    honest sample size.  `n_eff` is reported next to `n_rows` deliberately;
-    a table that shows only n_rows for augmented data is misleading even
+    honest sample size.  `n_eff` is reported next to `n_rows` deliberately.
+    A table that shows only n_rows for augmented data is misleading even
     when every number in it is correct.
 
     Optionally attaches the floor the cell has to beat.  `label` names a
     column of item labels, from which the trivial-predictor floors are
-    computed per cell; `floor` supplies floors that cannot be derived from a
+    computed per cell.  `floor` supplies floors that cannot be derived from a
     marginal (an n-gram model, a published reference).  Either or both.
 
-    `n_rows` counts the rows that carry `value`; `n_excluded` counts the
+    `n_rows` counts the rows that carry `value`.  `n_excluded` counts the
     rows of the cell that do not -- error, truncated and unparsed rows, or
     a NaN from the scorer.  The bootstrap drops those, and before this
     column it did so silently, so a cell could lose a third of its rows
@@ -396,11 +397,11 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
     would otherwise have to reconstruct.
 
     A row with a value and no cluster label is refused (ValueError) before
-    any cell is computed; the per-cell fallback below would otherwise catch
+    any cell is computed.  The per-cell fallback below would otherwise catch
     it as a skipped CI and drop the row from both counts.
 
     `caveats` says, per cell, when a number is computed correctly but
-    cannot be read at face value (see `cell_caveats`); cells with any
+    cannot be read at face value (see `cell_caveats`).  Cells with any
     caveat are also named in one RuntimeWarning.
     """
     _check_method(method)
@@ -451,9 +452,9 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
 
 
 # Coverage of a nominal 95% cluster-bootstrap interval against the true
-# mean, by number of clusters k (BCa; 400 simulated datasets each, k
-# clusters of 6 rows, rho = 0.6; binomial SE of each figure ~0.011).
-# Measured 5 Oct 2026; the percentile method is within 0.03 throughout.
+# mean, by number of clusters k (BCa, 400 simulated datasets per k, each
+# of k clusters of 6 rows at rho = 0.6, binomial SE of each figure ~0.011).
+# Measured 5 Oct 2026.  The percentile method is within 0.03 throughout.
 SMALL_K_COVERAGE = {3: 0.68, 5: 0.83, 10: 0.88, 20: 0.93, 30: 0.95}
 MIN_CLUSTERS = 20
 MAX_EXCLUDED_SHARE = 0.10
@@ -478,7 +479,7 @@ def cell_caveats(rec: Mapping[str, Any]) -> list[str]:
     * No spread: every value identical, so the interval has zero width --
       a statement about the sample, not certainty about the population.
     * Many excluded: rows without a value (errors, truncated, unparsed)
-      are left out, so the estimate describes the survivors; `attrition`
+      are left out, so the estimate describes the survivors.  `attrition`
       says which rows are missing and why.
     """
     out = []

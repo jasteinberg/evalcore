@@ -44,7 +44,7 @@ from .base import (
 #
 # A provider may attach opaque data to a model turn that must come back
 # verbatim -- Gemini's `thoughtSignature` on functionCall parts (a missing
-# one is a 400; found in a live run), Anthropic's thinking blocks.  The
+# one is a 400, found in a live run), Anthropic's thinking blocks.  The
 # parser keeps the turn as meta["raw_turn"] = {flavour: raw}, the agent
 # carries it on the assistant message, and the adapter of the SAME flavour
 # echoes it unchanged instead of rebuilding the turn.
@@ -89,18 +89,18 @@ def _split_system(messages: Sequence[Message]
 
 
 def _args_object(call: Mapping[str, Any]) -> Any:
-    """A call's arguments as the object Anthropic and Gemini require; a raw
+    """A call's arguments as the object Anthropic and Gemini require.  A raw
     string (arguments that were not valid JSON) is sent as {}."""
     return call["arguments"] if isinstance(call["arguments"], Mapping) else {}
 
 
 def _gemini_id(call_id: Any) -> dict[str, Any]:
-    """{"id": call_id} for an id the API issued; {} for a local
+    """{"id": call_id} for an id the API issued, {} for a local
     "gemini-<k>" id, which must never be sent back."""
     return {} if str(call_id).startswith("gemini-") else {"id": call_id}
 
 
-# each adapter sends exactly these params; the forwarding code below reads
+# each adapter sends exactly these params.  The forwarding code below reads
 # the same sets, so the refusal and the body cannot drift apart
 ANTHROPIC_SENT = frozenset({"max_tokens", "temperature", "top_p",
                             "stop_sequences"})
@@ -195,7 +195,7 @@ def _openai_adapter(model: str, messages: Sequence[Message],
     body |= {k: params[k] for k in sorted(OPENAI_SENT - {"max_tokens"})
              if k in params}
     # `max_tokens` is deprecated in Chat Completions and rejected by newer
-    # models (found live, 2 Oct); `max_completion_tokens` replaces it.  It
+    # models (found live, 2 Oct).  `max_completion_tokens` replaces it.  It
     # also counts reasoning tokens, so on a reasoning model a small budget
     # can be spent before any visible text -- the row is then `truncated`.
     if "max_tokens" in params:
@@ -229,8 +229,8 @@ def _gemini_adapter(model: str, messages: Sequence[Message],
     contents: list[JSONDict] = []
     for role, m in runs:
         if role == "tool":
-            # function responses go back in a user turn; `response` must be
-            # an object, so the text is wrapped
+            # function responses go back in a user turn, and `response`
+            # must be an object, so the text is wrapped
             contents.append({"role": "user", "parts": [
                 {"functionResponse": {
                     "name": t["name"],
@@ -268,7 +268,7 @@ def _gemini_adapter(model: str, messages: Sequence[Message],
 def _gemini_parse(js: Mapping[str, Any]) -> tuple[str, JSONDict]:
     # A blocked prompt is answered 200 with promptFeedback.blockReason and
     # no candidates.  Read as a reply it would be an ok row with text "",
-    # i.e. a wrong answer; it is a refusal of the request, and fatal because
+    # i.e. a wrong answer.  It is a refusal of the request, and fatal because
     # resending the same prompt is blocked the same way.
     if not js.get("candidates"):
         reason = (js.get("promptFeedback") or {}).get("blockReason")
@@ -277,7 +277,7 @@ def _gemini_parse(js: Mapping[str, Any]) -> tuple[str, JSONDict]:
     cands = js["candidates"]
     parts = cands[0].get("content", {}).get("parts", [])
     u = js.get("usageMetadata", {})
-    # the reference marks functionCall.id optional; a call without one gets
+    # the reference marks functionCall.id optional.  A call without one gets
     # a local id that is never sent back to the API
     calls = [{"id": p["functionCall"].get("id") or f"gemini-{k}",
               "name": p["functionCall"]["name"],
@@ -317,7 +317,7 @@ def _retry_after(r: httpx.Response) -> float | None:
     """Seconds the server asked to wait: the standard Retry-After header
     (seconds form), or a google.rpc.RetryInfo `retryDelay` such as "37s" in
     the error details.  The RetryInfo form follows Google's published
-    error model; it has not yet been seen in a live run."""
+    error model, but it has not yet been seen in a live run."""
     h = r.headers.get("retry-after")
     if h:
         try:
@@ -382,7 +382,7 @@ class HTTPBackend(Backend):
         self.default_params = dict(default_params or {})
         self.adapt, self.parse = ADAPTERS[flavour]
         # rate-limit headers of the latest response, verbatim, for
-        # calibration; replaced (not merged) on every response
+        # calibration, replaced (not merged) on every response
         self.last_rate_limits: dict[str, str] = {}
         self.client = httpx.Client(base_url=self.base_url,
                                    headers=headers, timeout=timeout)
@@ -419,7 +419,7 @@ class HTTPBackend(Backend):
 
 def _raise_for_status(r: Any) -> None:
     """408, 409, 429 and 5xx are worth retrying (Transient, honouring
-    Retry-After); any other 4xx is the request's fault (Fatal)."""
+    Retry-After).  Any other 4xx is the request's fault (Fatal)."""
     if r.status_code in (408, 409, 429) or r.status_code >= 500:
         raise Transient(_error_text(r), retry_after=_retry_after(r))
     if r.status_code >= 400:

@@ -6,7 +6,7 @@ It must NOT know about cells, items, clusters, or metrics -- everything above
 this line is backend-agnostic, which is what lets one core serve both a
 rate-limited HTTP API and a local batched forward pass.
 
-Batching is expressed by `complete_batch`; the default maps `complete` over
+Batching is expressed by `complete_batch`.  The default maps `complete` over
 the list.  An HTTP backend leaves that alone and gets its throughput from the
 runner's thread pool.  A local HF backend overrides it and gets its
 throughput from a real batched forward, with the runner at one worker.
@@ -25,7 +25,7 @@ from ..spec import digest
 
 class Transient(RuntimeError):
     """Rate limit, timeout, 5xx -- worth retrying.  `retry_after` is the
-    delay the server asked for, in seconds, when it said; the retry loop
+    delay the server asked for, in seconds, when it said.  The retry loop
     waits at least that long instead of its own shorter guess."""
 
     def __init__(self, msg: str = "", retry_after: float | None = None) -> None:
@@ -39,8 +39,8 @@ class Fatal(RuntimeError):
 
 # Shapes that cross the backend boundary, named so signatures say what they
 # carry.  A message is {"role", "content"} plus, for tool use, "tool_calls"
-# or "tool_call_id"/"name"/"is_error"; a tool spec is {"name",
-# "description", "parameters"}; provider JSON is whatever the API returns.
+# or "tool_call_id"/"name"/"is_error".  A tool spec is {"name",
+# "description", "parameters"}.  Provider JSON is whatever the API returns.
 Message = Mapping[str, Any]
 ToolSpec = Mapping[str, Any]
 JSONDict = dict[str, Any]
@@ -127,8 +127,9 @@ def require(params: Mapping[str, Any], key: str, who: str) -> Any:
     """Fail loudly rather than substitute a provider-specific default.
 
     Anthropic requires max_tokens, OpenAI does not, and a local generate call
-    has its own idea; left implicit, one spec run against three backends gets
-    three different generation budgets and the comparison is meaningless."""
+    has its own idea.  Left implicit, one spec run against three
+    backends gets three different generation budgets and the comparison is
+    meaningless."""
     if params.get(key) is None:
         raise Fatal(
             f"{who} requires '{key}': set it in the cell params or in the "
@@ -168,7 +169,7 @@ def refuse_unread(params: Mapping[str, Any], read: Collection[str],
                   who: str) -> None:
     """Refuse any param the backend would not read (send, or compute with).
 
-    `refuse_dropped` covers the decode keys; this covers the rest.  Every
+    `refuse_dropped` covers the decode keys, and this covers the rest.  Every
     key in the request params moves the cell id and the cache key, so a key
     nothing reads (a typo, a grid axis that belongs in the cell's tags, a
     provider field nobody mapped) makes cells that look different and are
@@ -199,12 +200,12 @@ class Backend:
         against another model, checkpoint or default budget can never be
         served this one's cache or resume onto its rows.
 
-        Every backend must define it; there is no default.  A default can
+        Every backend must define it.  There is no default.  A default can
         only see what the base class knows (a name, `default_params`), and
         a backend configured in `__init__` -- a model path, a revision, a
         temperature held as an attribute -- would then share keys across
         configurations.  Return a JSON-serialisable dict of what determines
-        the outputs; leave out what does not (a timeout, an API key), or
+        the outputs.  Leave out what does not (a timeout, an API key), or
         every change to it costs a full re-run.  Built-in backends start
         from `_base_identity()`."""
         raise TypeError(
@@ -236,15 +237,15 @@ class Backend:
         this and calls super()."""
         name = type(self).__name__
         if req.tools and not self.supports_tools:
-            return (f"{name} cannot send tools (supports_tools is False); "
-                    f"wrap a tool-capable backend in AgentBackend")
+            return (f"{name} cannot send tools (supports_tools is False). "
+                    f"Wrap a tool-capable backend in AgentBackend")
         logit_only = [f for f, v in (("target", req.target),
                                      ("input_ids", req.input_ids),
                                      ("candidates", req.candidates))
                       if v is not None]
         if logit_only and not self.supports_target:
             return (f"{name} cannot teacher-force or score "
-                    f"{', '.join(logit_only)} (supports_target is False); use "
+                    f"{', '.join(logit_only)} (supports_target is False). Use "
                     f"a backend that reads logits, such as HFBackend")
         return None
 
@@ -281,9 +282,9 @@ def request_key(req: Request, repeat: int, backend: Backend) -> str:
 
         request_key = digest(request.cache_key, backend.identity(), repeat)
 
-    `request.cache_key` covers the messages and params; `identity()` covers
+    `request.cache_key` covers the messages and params.  `identity()` covers
     what the backend merges in (a `model` or `max_tokens` set as a default
-    is otherwise invisible); the repeat index makes repeats distinct samples
+    is otherwise invisible).  The repeat index makes repeats distinct samples
     rather than one sample read back k times from the cache, which at
     temperature > 0 would set the within-cluster variance of repeats to 0
     and with it every rho, DEFF and n_eff computed from them.
@@ -310,9 +311,9 @@ def with_retries(fn: Callable[[Request], Response], req: Request,
     """Exponential backoff with full jitter: sleep ~ U(0, min(cap, base 2^k)).
 
     Full jitter rather than fixed backoff because every worker hits the same
-    429 at the same instant; deterministic sleeps re-synchronise the thundering
-    herd on every retry, while U(0, .) spreads the retries uniformly over the
-    window and is what actually drains a rate-limit queue."""
+    429 at the same instant.  Deterministic sleeps re-synchronise the
+    thundering herd on every retry, while U(0, .) spreads the retries uniformly
+    over the window and is what actually drains a rate-limit queue."""
     return _retrying(lambda: fn(req),
                      lambda e: Response(req.unit_id, error=e),
                      seed if seed is not None else req.unit_id,
@@ -340,7 +341,7 @@ def batch_with_retries(fn: Callable[[Sequence[Request]], list[Response]],
 
 
 # Longest server-requested wait honoured between attempts.  A server asking
-# for longer (a daily quota) is not going to clear within a run; waiting
+# for longer (a daily quota) is not going to clear within a run.  Waiting
 # would only hang the sweep, so the unit fails now, saying so.
 MAX_SERVER_WAIT = 300.0
 

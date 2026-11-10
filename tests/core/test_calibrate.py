@@ -15,7 +15,7 @@ MSGS = [{"role": "user", "content": "Reply with the single word: ok"}]
 
 @pytest.fixture
 def mock_http():
-    """The scripted server.  Only the calibrate() tests need httpx; the
+    """The scripted server.  Only the calibrate() tests need httpx, and the
     derive() tests below run without it."""
     pytest.importorskip("httpx")
     from support.http import mock_http

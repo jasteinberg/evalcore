@@ -16,7 +16,7 @@ A factory is any callable (a function or a class) registered under a name:
 and a config then says {"backend": {"type": "vllm", "url": ..., "model": ...}}.
 The factory's signature IS the schema: keys it does not take are refused
 by name, parameters without a default are required, and nothing else needs
-writing.  (A factory taking **kwargs accepts any key; it then owns the
+writing.  (A factory taking **kwargs accepts any key and then owns the
 checking.)
 
 Some factories need more than their spec -- a retriever needs the corpus,
@@ -25,7 +25,7 @@ a retrieval backend the task.  Those are KEYWORD-ONLY parameters (after a
 where, docs=...)`, never settable from a spec, and a factory used where
 its context is not available is refused by name.
 
-A plugin module registers its factories on import; name it under
+A plugin module registers its factories on import.  Name it under
 "plugins" in the config (a module name or a .py path) and `from_config`
 imports it first.
 """
@@ -42,7 +42,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 class ConfigError(ValueError):
-    """A config that cannot be read as written; names the offending key."""
+    """A config that cannot be read as written.  It names the offending key."""
 
 
 class Registry:
@@ -94,8 +94,8 @@ class Registry:
                               f"{self.kind}: one of {self.names()}")
         name = spec["type"]
         if name not in self.factories:
-            raise ConfigError(f"{where}: unknown {self.kind} {name!r}; "
-                              f"registered: {self.names()}")
+            raise ConfigError(f"{where}: unknown {self.kind} {name!r}. "
+                              f"Registered: {self.names()}")
         factory = self.factories[name]
         params = inspect.signature(factory).parameters
         free = any(p.kind is p.VAR_KEYWORD for p in params.values())
@@ -105,7 +105,7 @@ class Registry:
         given = {k: v for k, v in spec.items() if k != "type"}
         clash = sorted(set(given) & (set(needs) | set(context)))
         if clash:
-            raise ConfigError(f"{where}: {clash} cannot be set here; they are "
+            raise ConfigError(f"{where}: {clash} cannot be set here because they are "
                               f"supplied by the experiment")
         absent = sorted(k for k, p in needs.items()
                         if p.default is p.empty and k not in context)
@@ -115,7 +115,7 @@ class Registry:
         unknown = sorted(set(given) - set(own))
         if unknown and not free:
             raise ConfigError(f"{where}: unknown key(s) {unknown} for "
-                              f"{self.kind} {name!r}; allowed: {sorted(own)}")
+                              f"{self.kind} {name!r}. Allowed: {sorted(own)}")
         missing = sorted(k for k, p in own.items()
                          if p.default is p.empty and k not in given)
         if missing:
@@ -134,7 +134,7 @@ def register(kind: str, name: str, *, replace: bool = False
              ) -> Callable[[F], F]:
     """Decorator: register a factory of `kind` under `name`."""
     if kind not in REGISTRIES:
-        raise ValueError(f"unknown kind {kind!r}; kinds: {list(KINDS)}")
+        raise ValueError(f"unknown kind {kind!r}. Kinds: {list(KINDS)}")
     return REGISTRIES[kind](name, replace=replace)
 
 

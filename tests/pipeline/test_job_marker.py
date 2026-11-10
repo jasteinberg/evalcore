@@ -15,7 +15,7 @@ from evalcore import Item, grid
 from evalcore.pipeline import RunOptions, read_marker
 
 pytestmark = pytest.mark.filterwarnings(
-    # plumbing fixtures are deliberately tiny; caveats are tested in test_stats
+    # plumbing fixtures are deliberately tiny. Caveats are tested in test_stats
     "ignore:.*carry caveats:RuntimeWarning")
 
 

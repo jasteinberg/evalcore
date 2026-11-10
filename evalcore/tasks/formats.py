@@ -47,7 +47,7 @@ _MISSING = object()
 
 
 class TaskFormatError(ValueError):
-    """A task record that cannot be read as specified; names the record."""
+    """A task record that cannot be read as specified.  It names the record."""
 
 
 def _get(rec: Any, path: str) -> Any:
@@ -102,8 +102,8 @@ def _translate(rec: Any, mapping: Mapping[str, Any] | Callable | None,
     out = {}
     for field, how in mapping.items():
         if field not in CANONICAL_FIELDS:
-            raise TaskFormatError(f"mapping names unknown field {field!r}; "
-                                  f"canonical fields: {CANONICAL_FIELDS}")
+            raise TaskFormatError(f"mapping names unknown field {field!r}. "
+                                  f"Canonical fields: {CANONICAL_FIELDS}")
         val = how(rec) if callable(how) else _get(rec, how)
         if val is _MISSING:
             raise TaskFormatError(f"record {i}: no value at path {how!r} "
@@ -115,8 +115,8 @@ def _translate(rec: Any, mapping: Mapping[str, Any] | Callable | None,
 def _validate(c: dict[str, Any], i: int) -> None:
     unknown = set(c) - set(CANONICAL_FIELDS)
     if unknown:
-        raise TaskFormatError(f"record {i}: unknown field(s) {sorted(unknown)}; "
-                              f"put extra data under 'meta'")
+        raise TaskFormatError(f"record {i}: unknown field(s) {sorted(unknown)}. "
+                              f"Put extra data under 'meta'")
     if c.get("id") in (None, ""):
         raise TaskFormatError(f"record {i}: no id")
     if ("prompt" in c) == ("messages" in c):
@@ -135,7 +135,7 @@ def _validate(c: dict[str, Any], i: int) -> None:
             spec.get("name") if isinstance(spec, Mapping) else None)
         if name not in GRADERS:
             raise TaskFormatError(f"record {i} ({c['id']}): unknown grader "
-                                  f"{name!r}; known: {sorted(GRADERS)}")
+                                  f"{name!r}. Known: {sorted(GRADERS)}")
         if "gold" not in c and name != "abstain":
             raise TaskFormatError(f"record {i} ({c['id']}): grader {name!r} "
                                   f"needs a 'gold'")

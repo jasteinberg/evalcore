@@ -1,8 +1,8 @@
 """Trivial-predictor floors, so a headline number has a scale.
 
 A metric alone is not interpretable.  "1.69 nats" or "68% accurate" is a
-number, not a result; what makes it a result is the distance to what you get
-for free.  This module computes the free numbers.
+number, not a result.  What makes it a result is the distance to what you
+get for free.  This module computes the free numbers.
 
 The failure it guards against is specific and common: a stated baseline that
 is *below* a trivial predictor, so clearing it demonstrates nothing.  It is
@@ -138,7 +138,7 @@ def headroom(observed: float, floors_df: pd.DataFrame,
     units = set(floors_df.get("units", pd.Series(["?"] * len(floors_df))))
     if len(units) > 1:
         raise ValueError(
-            f"floors span more than one scale ({sorted(units)}); compare "
+            f"floors span more than one scale ({sorted(units)}). Compare "
             f"within a scale, since the ordering across them is meaningless")
     idx = (floors_df["value"].idxmax() if higher_is_better
            else floors_df["value"].idxmin())

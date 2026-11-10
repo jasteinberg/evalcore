@@ -50,7 +50,7 @@ superset of the decode params: it also carries `model`.
 what the model emits: `temperature`, `top_p`, `top_k`, `max_tokens`, `seed`,
 `stop`, `stop_sequences`. Cells that will be differenced must agree on these.
 
-**`default_params`** — backend-level fallbacks. Request params win; nothing is
+**`default_params`** — backend-level fallbacks. Request params win. Nothing is
 invented if neither supplies a value.
 
 **Transient / Fatal** — retry classification, decided once in the backend
@@ -107,7 +107,7 @@ write bare `n` in a results table.
 
 **Unit.** In this package a *unit* is a `(cell, item, repeat)` triple. In the
 statistics literature the "unit" is usually the thing you resample, which here
-is the **cluster**. When reading `n_eff`, "unit" means cluster; when reading
+is the **cluster**. When reading `n_eff`, "unit" means cluster. When reading
 the runner, it means one model call.
 
 **`params`.** Cell params (everything identity-bearing, including `model`) are
@@ -126,7 +126,7 @@ correlation between conditions, and not a rank correlation. If a document
 needs both, name the second one explicitly.
 
 **Score / metric.** A score is per-row, a metric is per-cell. `summarize`
-consumes scores and emits metrics; a "score" appearing in a results table with
+consumes scores and emits metrics. A "score" appearing in a results table with
 a confidence interval is a metric that has been mislabelled.
 
 ---

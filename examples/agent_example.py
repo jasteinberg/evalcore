@@ -6,7 +6,7 @@ one unit is one episode and one row, and the row's meta holds the whole
 trajectory.  The items are rigged to reach every outcome the loop has:
 
     plain         calls add, reads the result, answers       -> ok
-    typo          first call has a bad argument name; the
+    typo          first call has a bad argument name.  The
                   ToolInputError goes back to the model as
                   the tool's output, and it corrects itself   -> ok
     outage        the tool's backend is down (ToolUnavailable) -> tool_error

@@ -1,11 +1,11 @@
 """Calibration tests, hand-computed cases and invariances of the cluster
 statistics.  A CI routine that is never checked against a known generating
-process is decoration; the coverage tests check that.  The rest take their
-expected values from closed forms (exact fractions where possible), tiny
-hand-computed tables, or two paths that must agree; a row of the invariant
-catalogue (C1, C2, ...) is named first in its docstring, and a newly found
-violation lands as a strict xfail that must fail, for the stated reason,
-until the defect is fixed."""
+process is decoration, and the coverage tests check that.  The rest take
+their expected values from closed forms (exact fractions where possible),
+tiny hand-computed tables, or two paths that must agree.  A row of the
+invariant catalogue (C1, C2, ...) is named first in its docstring, and a
+newly found violation lands as a strict xfail that must fail, for the
+stated reason, until the defect is fixed."""
 
 import warnings
 from fractions import Fraction
@@ -34,7 +34,7 @@ from evalcore.evaluation.stats import (
 )
 from evalcore.testing import assert_same
 
-# small fixtures by design; the caveats themselves are tested below
+# small fixtures by design, and the caveats themselves are tested below
 tiny = pytest.mark.filterwarnings("ignore:.*carry caveats:RuntimeWarning")
 
 
@@ -72,8 +72,8 @@ def test_icc_recovers_rho():
                           rng=np.random.default_rng(s)), "y")["rho"]
            for s in range(8)]
     # One estimate at k=400, m=8 has sd ~0.027 over seeds (Var(rho_hat) ~
-    # 2(1-rho)^2 (1+(m-1)rho)^2 / (m(m-1)(k-1)) gives 0.020; the empirical
-    # spread is larger).  The mean of 8 then has SE ~0.0096: 3 SE.
+    # 2(1-rho)^2 (1+(m-1)rho)^2 / (m(m-1)(k-1)) gives 0.020, but the
+    # empirical spread is larger).  The mean of 8 then has SE ~0.0096: 3 SE.
     assert abs(np.mean(est) - rho_true) < 0.03
     o = effective_n(clustered(k=400, m=m, s2_a=s2_a, s2_e=s2_e), "y")
     assert abs(o["m0"] - m) < 1e-9                       # balanced design
@@ -90,8 +90,8 @@ def test_deff_endpoints():
     # error ~1e-4 here, so 1e-3 is loose by an order of magnitude already.
     assert hi["n_eff"] == pytest.approx(200, rel=1e-3)
     # rho ~ 1e-4, but rho_hat has SE ~0.018 at k=200, m=6 and is clipped at
-    # 0, so it sits about one SE high; rel=0.25 admits rho_hat up to 0.067,
-    # i.e. ~3.7 SE.
+    # 0, so it sits about one SE high.  rel=0.25 admits rho_hat up to
+    # 0.067, i.e. ~3.7 SE.
     assert lo["n_eff"] == pytest.approx(1200, rel=0.25)
 
 
@@ -114,7 +114,7 @@ def _coverage(R, draw, estimate, truth):
 def test_bca_cluster_bootstrap_covers():
     """`summarize` defaults to BCa, so BCa is the estimator that has to be
     calibrated, not only the percentile method.  R=200: binomial SE of the
-    coverage at 0.95 is 0.015; the band is ~ -3/+2.7 SE."""
+    coverage at 0.95 is 0.015, so the band is ~ -3/+2.7 SE."""
     cov = _coverage(
         200, lambda s: clustered(k=40, m=6, mu=0.3,
                                  rng=np.random.default_rng(1000 + s)),
@@ -144,7 +144,7 @@ def test_paired_bootstrap_covers_the_true_difference():
 
 
 def test_cluster_bootstrap_covers_and_row_bootstrap_does_not():
-    """95% nominal.  Cluster bootstrap should land near 0.95; the row
+    """95% nominal.  Cluster bootstrap should land near 0.95.  The row
     bootstrap should under-cover badly, by the factor DEFF in eq. (3)."""
     R, mu = 120, 0.3
     cov_c = cov_r = 0
@@ -180,7 +180,7 @@ def test_paired_beats_unpaired_when_items_correlate():
 def test_wilson_does_not_collapse_at_the_boundary():
     z2 = 1.959963984540054 ** 2
     # at phat = 0 the score equation p^2 = z^2 p(1-p)/n has roots 0 and
-    # z^2/(n + z^2) = 0.1135; Wald would give [0, 0]
+    # z^2/(n + z^2) = 0.1135, where Wald would give [0, 0]
     lo, hi = wilson_interval(0, 30)
     assert lo == 0.0 and hi == pytest.approx(z2 / (30 + z2), rel=1e-9)
     lo, hi = wilson_interval(30, 30)
@@ -209,7 +209,7 @@ def test_multiple_comparisons_exact_rejection_sets():
 
 
 def test_bh_is_step_up_not_step_down():
-    """p_(1) = .040 > q/m = .01, so a step-DOWN procedure rejects nothing;
+    """p_(1) = .040 > q/m = .01, so a step-DOWN procedure rejects nothing.
     BH takes the LARGEST i with p_(i) <= iq/m, which is i = 5 (.044 <= .05),
     and rejects all five."""
     p = [0.044, 0.040, 0.043, 0.041, 0.042]
@@ -289,7 +289,7 @@ def test_only_the_affected_cells_are_flagged():
 
 
 def test_the_quoted_undercoverage_is_what_the_bootstrap_does():
-    """The caveat quotes SMALL_K_COVERAGE; check its k=5 entry against a
+    """The caveat quotes SMALL_K_COVERAGE.  Check its k=5 entry against a
     fresh simulation (R=200: binomial SE ~0.027 near 0.83)."""
     R, mu, hits = 200, 0.3, 0
     for s in range(R):
@@ -330,7 +330,7 @@ def test_c1_a_row_without_a_cluster_is_refused_by_every_bootstrap():
     bootstrap, and dropping it would leave it in neither n_rows nor
     n_excluded.  3 of 20 rows carry a value and no cluster:
     cluster_bootstrap, paired_bootstrap and summarize all refuse, naming
-    the count; a row with neither value nor cluster is only an excluded
+    the count.  A row with neither value nor cluster is only an excluded
     row and passes."""
     df = pd.DataFrame({"cluster": [f"c{i // 2}" for i in range(20)],
                        "condition": ["a", "b"] * 10, "y": np.arange(20.0)})
@@ -393,8 +393,8 @@ def test_c4_duplicating_rows_within_a_cluster_changes_nothing():
 
 
 def test_c7_paired_bootstrap_refuses_an_unknown_method():
-    """C7.  cluster_bootstrap refuses method="bogus"; the paired form must
-    too, or a typo silently changes the interval."""
+    """C7.  cluster_bootstrap refuses method="bogus", and the paired form
+    must too, or a typo silently changes the interval."""
     rng = np.random.default_rng(0)
     df = pd.DataFrame({"cluster": np.repeat(np.arange(10), 2),
                        "condition": ["a", "b"] * 10, "y": rng.normal(size=20)})
@@ -427,8 +427,8 @@ def test_c12_unbalanced_design_effect_by_hand():
 
 
 def test_c13_negative_between_variance_is_clipped():
-    """C13.  Clusters [0, 2], [0, 2]: means 1, 1, so MS_b = 0;
-    MS_w = 4 (1^2)/(N - k) = 4/2 = 2; m0 = (4 - 8/4)/1 = 2;
+    """C13.  Clusters [0, 2], [0, 2]: means 1, 1, so MS_b = 0.  Then
+    MS_w = 4 (1^2)/(N - k) = 4/2 = 2, m0 = (4 - 8/4)/1 = 2 and
     s2_a = (0 - 2)/2 = -1 < 0.  The moment estimate is negative, so rho is
     clipped to 0, DEFF = 1 and n_eff = N = 4 (unclipped: rho = -1,
     DEFF = 0, n_eff infinite).  Exact: every quantity is a small integer."""
@@ -467,7 +467,7 @@ def test_c15_bca_shifts_up_for_right_skewed_cluster_means():
     assert b.lo > p.lo and b.hi > p.hi
 
 
-# --- floors: summarize attaches them; the verdict uses the interval -------------
+# --- floors: summarize attaches them and the verdict uses the interval ----------
 
 def _frame(rate: float, n_items: int = 120, seed: int = 0) -> pd.DataFrame:
     """One condition, `rate` correct, labels 70/30 so majority = 0.70."""
@@ -552,9 +552,9 @@ def test_c16_loss_floor_verdict_uses_the_upper_bound():
 
 def test_c32_two_sided_p_values_by_hand():
     """C32.  Bootstrap inversion: replicates 5 x (-1) and 95 x (+1) give
-    P(D* <= 0) = 0.05 and P(D* >= 0) = 0.95, so p = 2 min = 0.10; the
+    P(D* <= 0) = 0.05 and P(D* >= 0) = 0.95, so p = 2 min = 0.10.  The
     mirror image gives the same.  Exact McNemar: (b, c) = (0, 6) gives
-    2 P(X <= 0 | n = 6, 1/2) = 2/64 = 0.03125; (3, 3) gives
+    2 P(X <= 0 | n = 6, 1/2) = 2/64 = 0.03125, and (3, 3) gives
     2 P(X <= 3) = 2 (1 + 6 + 15 + 20)/64 = 84/64, capped at 1."""
     def boot(reps):
         return BootResult(0.0, 0.0, 0.0, 0.0, 1, 1, replicates=np.array(reps))
@@ -570,7 +570,7 @@ def test_c32_two_sided_p_values_by_hand():
 @tiny
 def test_c34_row_order_does_not_change_any_estimate():
     """C34.  Every estimator is a function of the multiset of (cluster,
-    value) rows; the row order carries no information.  Shuffled vs
+    value) rows, so the row order carries no information.  Shuffled vs
     original through cluster_bootstrap, paired_bootstrap, effective_n and
     summarize, same seed.  Tolerance 1e-12 relative: within-cluster sums
     run in a different order (rounding ~1e-16 per term)."""

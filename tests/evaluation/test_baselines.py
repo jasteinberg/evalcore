@@ -61,7 +61,7 @@ def test_headroom_lower_is_better_for_losses():
 
 
 def test_headroom_refuses_to_rank_across_scales():
-    """An accuracy and a loss in one table have no meaningful ordering; the
+    """An accuracy and a loss in one table have no meaningful ordering, so the
     'strongest floor' would just be the smallest number present."""
     mixed = pd.concat([floors(["a", "b"]),
                        floors(custom={"trigram": 1.784}, custom_units="nats")])

@@ -10,8 +10,8 @@ question: `to_frame` deduplicates on unit_id, so a frame cannot show a
 duplicated row even when the sink holds one.
 
 Rows of the invariant catalogue (B16b, B18, ...) are named in the docstring
-of the test that holds them; a newly found violation lands as a strict
-xfail whose reason names the defect.
+of the test that holds them, and a newly found violation lands as a
+strict xfail whose reason names the defect.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def one_cell(n: int) -> list[Unit]:
 # --- retry: fail once, then succeed ----------------------------------------
 
 class FailsOnce(Answers):
-    """The first call of the whole run raises Transient; every later call
+    """The first call of the whole run raises Transient.  Every later call
     answers.  One 429 in a sweep, the most common failure there is."""
 
     def __init__(self) -> None:
@@ -165,8 +165,8 @@ def test_an_error_is_never_cached(tmp_path, fail):
 @pytest.mark.usefixtures("no_backoff")
 def test_resume_retries_units_whose_last_row_is_an_error(tmp_path):
     """B16b.  An error row records a failed attempt, not a result.  A rerun
-    must try those units again (and say so), unless asked not to; and once
-    a unit's LAST row is ok, made from the same request, a further rerun
+    must try those units again (and say so), unless asked not to.  Once a
+    unit's LAST row is ok, made from the same request, a further rerun
     has nothing to do.  Expected calls are fixed by the four backends."""
     us = one_cell(4)
     out = tmp_path / "r.jsonl"
@@ -263,8 +263,8 @@ def test_batch_that_drops_a_response_gives_an_error_row(tmp_path):
 
 def test_truncated_final_line_is_reported_and_loses_nothing(tmp_path):
     """A kill during `write` leaves a fragment with no newline.  The reader
-    must survive it and say so; resume must re-run that unit and write its
-    row intact, not glued onto the fragment."""
+    must survive it and say so, and resume must re-run that unit and write
+    its row intact, not glued onto the fragment."""
     us = one_cell(4)
     out = tmp_path / "r.jsonl"
     run(us, Answers(), out)
@@ -338,8 +338,8 @@ def test_a_truncated_generation_is_not_scored(tmp_path):
 @pytest.mark.filterwarnings("ignore:.*carry caveats:RuntimeWarning")  # tiny fixture
 def test_every_planned_unit_lands_in_exactly_one_state(tmp_path):
     """One unit per state, fixed by construction:
-    q0, q5 ok; q1 truncated; q2 unparsed; q3 call refused; q4 scorer bug;
-    q6 planned but never attempted (limit=).  The metric must see only the
+    q0 and q5 ok, q1 truncated, q2 unparsed, q3 call refused, q4 scorer
+    bug, q6 planned but never attempted (limit=).  The metric must see only the
     two ok rows -- a scorer that raises leaves the metric MISSING, never a
     0 averaged into accuracy -- and every other unit must be accounted for,
     by name."""
@@ -413,8 +413,8 @@ def test_rows_from_before_status_get_one_derived(tmp_path):
 
 def test_a_row_with_an_error_is_never_ok(tmp_path):
     """B18.  Hand-written sink rows: a row stored as ok but carrying an
-    error is an error; a tool_error with an error keeps its own failure
-    status; error rows stay error; a row with no error keeps ok; a row
+    error is an error.  A tool_error with an error keeps its own failure
+    status, error rows stay error, and a row with no error keeps ok.  A row
     missing its status among rows that have one is derived from `error`."""
     out = tmp_path / "r.jsonl"
     rows = [{"unit_id": "a", "status": "ok", "error": "x"},
@@ -491,7 +491,7 @@ def test_run_cache_resume_and_frame(tmp_path):
 
 def test_a_cache_hit_gives_the_same_row_as_a_fresh_call(tmp_path):
     """B19.  Two sinks share one cache.  The first run calls the backend and
-    its response is truncated; the second must be served from the cache
+    its response is truncated.  The second must be served from the cache
     and produce the same row (truncated, not scored), differing only in
     `cached`.  Expected: by construction the backend is called once and the
     scorer never (a truncated response is not scored)."""
@@ -518,7 +518,7 @@ def test_the_frame_carries_the_cluster_into_summarize(tmp_path):
     """A value constant within each cluster and varying across clusters has
     MS_w = 0, so rho = 1 exactly and n_eff = N / (1 + (m-1)) = k: twenty
     clusters of five rows are worth twenty rows.  The expected value comes
-    from eq. (3), not from running the estimator; it holds only if the
+    from eq. (3), not from running the estimator.  It holds only if the
     runner wrote each augmentation's parent as its cluster."""
     cells = grid({"model": ["m1"], "temperature": [0.0]})
     its = items(20, aug=4)

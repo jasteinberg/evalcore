@@ -102,16 +102,16 @@ def test_a_task_from_a_file_runs_and_tags_every_row(tmp_path):
 def test_d2_empty_or_punctuation_gold_is_refused_at_load(gold):
     """D2.  Contract: a gold that normalises to the empty string matches
     every response under `contains` ('' is a substring of anything), so it
-    cannot be graded; load_tasks must refuse it."""
+    cannot be graded, and load_tasks must refuse it."""
     with pytest.raises(TaskFormatError):
         load_tasks([{"id": "q", "prompt": "p", "gold": gold,
                      "grader": "contains"}])
 
 
 def test_d6_grader_option_typo_is_refused_at_load():
-    """D6.  Contract: `numeric` has no option `rell`; load_tasks checks the
-    grader name at load, so it must check the option keys there too, and
-    name the bad key."""
+    """D6.  Contract: `numeric` has no option `rell`, and load_tasks checks
+    the grader name at load, so it must check the option keys there too,
+    and name the bad key."""
     with pytest.raises(TaskFormatError, match="rell"):
         load_tasks([{"id": "q", "prompt": "p", "gold": 1,
                      "grader": {"name": "numeric", "rell": 0.01}}])

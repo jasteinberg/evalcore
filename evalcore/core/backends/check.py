@@ -1,9 +1,9 @@
 """Conformance check for a backend, to run before a sweep.
 
-The runner relies on a few properties no type signature expresses: one
-response per request, in order, with the request's unit_id; an identity
-that is stable and serialisable; failures raised as Transient or Fatal.
-A backend that breaks one of them does not crash the harness -- it
+The runner relies on a few properties no type signature expresses.  There
+is one response per request, in order, with the request's unit_id.  The
+identity is stable and serialisable.  Failures are raised as Transient or
+Fatal.  A backend that breaks one of them does not crash the harness -- it
 produces rows that look like results.  This check makes the calls and
 says which property failed.  It calls the backend for real: pass cheap
 requests (the default sends four short prompts)."""
@@ -41,7 +41,7 @@ class CheckReport:
 
 def check_backend(backend: Backend, requests: Sequence[Request] | None = None,
                   params: dict | None = None) -> CheckReport:
-    """Run the contract checks; see the module docstring.  `params` are
+    """Run the contract checks (see the module docstring).  `params` are
     added to the default requests (e.g. the model and max_tokens an HTTP
     backend requires)."""
     rep = CheckReport()

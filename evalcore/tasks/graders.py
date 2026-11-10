@@ -9,7 +9,7 @@ counted in attrition instead of being averaged in as a zero.
 
 A grader is named in an item's payload as a string or a dict,
 `"numeric"` or `{"name": "numeric", "rel": 0.01}`, so a task file can say how
-it is graded without code.  `grade(spec, text, gold)` dispatches;
+it is graded without code.  `grade(spec, text, gold)` dispatches, and
 `make_score()` builds a runner `score` function that reads the spec and the
 gold answer from each item.
 
@@ -61,8 +61,8 @@ _PUNCT = str.maketrans("", "", string.punctuation)
 
 
 def normalize(s: str, case: bool = False, punct: bool = False) -> str:
-    """Collapse whitespace; lower-case unless `case`; drop ASCII punctuation
-    unless `punct`."""
+    """Collapse whitespace, lower-case unless `case`, and drop ASCII
+    punctuation unless `punct`."""
     s = s if case else s.lower()
     s = s if punct else s.translate(_PUNCT)
     return " ".join(s.split())
@@ -93,8 +93,8 @@ def _text_golds(gold: Any, case: bool, punct: bool) -> list[str]:
 def exact(text: str, gold: Any, case: bool = False, punct: bool = False,
           extract: str | None = None) -> dict[str, Any]:
     """Normalised string equality against the gold or any of its aliases.
-    `extract` is a regex whose first group is the answer; no match is a
-    parse failure."""
+    `extract` is a regex whose first group is the answer, and no match is
+    a parse failure."""
     golds = _text_golds(gold, case, punct)
     t = _text(text)
     if extract is not None:
@@ -141,7 +141,7 @@ def numeric(text: str, gold: Any, tol: float = 0.0, rel: float = 0.0,
 @grader("choice")
 def choice(text: str, gold: str, options: str = "ABCD") -> dict[str, Any]:
     """A multiple-choice letter.  An explicit statement wins ("Answer: C",
-    "answer is (C)"); otherwise a standalone option letter, but only if
+    "answer is (C)").  Otherwise a standalone option letter, but only if
     exactly ONE distinct option letter stands alone in the text.  Taking the
     first letter instead would read "A good question..." as answer A, and
     several distinct letters are ambiguous, which is a parse failure.
@@ -184,8 +184,8 @@ def yes_no(text: str, gold: str) -> dict[str, Any]:
 @grader("set_f1")
 def set_f1(text: str, gold: Sequence[str], pattern: str) -> dict[str, Any]:
     """Identifiers matching `pattern` (cited span ids, entities) against the
-    gold set.  `correct` is exact set equality; precision, recall and F1 are
-    reported beside it.  No identifier at all is a parse failure."""
+    gold set.  `correct` is exact set equality, and precision, recall and
+    F1 are reported beside it.  No identifier at all is a parse failure."""
     pred = set(re.findall(pattern, _text(text)))
     if not pred:
         raise ParseFailure(f"no identifier matching {pattern!r}")
@@ -217,14 +217,14 @@ def abstain(text: str, gold: Any = None,
 
 
 def _parse(spec: str | Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """A grader spec as (name, options); KeyError for an unknown name."""
+    """A grader spec as (name, options).  KeyError for an unknown name."""
     if isinstance(spec, str):
         name, opts = spec, {}
     else:
         opts = dict(spec)
         name = opts.pop("name")
     if name not in GRADERS:
-        raise KeyError(f"unknown grader {name!r}; known: {sorted(GRADERS)}")
+        raise KeyError(f"unknown grader {name!r}. Known: {sorted(GRADERS)}")
     return name, opts
 
 
@@ -251,8 +251,8 @@ def check_spec(spec: str | Mapping[str, Any], gold: Any = _NO_GOLD) -> None:
         params.pop(p, None)
     unknown = sorted(set(opts) - set(params))
     if unknown:
-        raise ValueError(f"grader {name!r} has no option(s) {unknown}; "
-                         f"it takes {sorted(params)}")
+        raise ValueError(f"grader {name!r} has no option(s) {unknown}. "
+                         f"It takes {sorted(params)}")
     missing = sorted(k for k, p in params.items()
                      if p.default is inspect.Parameter.empty and k not in opts)
     if missing:
@@ -300,7 +300,7 @@ def label(text: str, gold: str, options: Sequence[str]) -> dict[str, Any]:
     """A closed-set answer: the response must name exactly one of `options`
     (whole-word, case-insensitive), and it is compared with the gold.  Free
     text around it is fine ("the slowest was fetch_page").  Naming none is a
-    parse failure; naming several is ambiguous, also a parse failure --
+    parse failure.  Naming several is ambiguous, also a parse failure --
     otherwise listing every option would score as right.  A gold that is not
     one of the options could never be named, so it is refused."""
     if gold not in options:
