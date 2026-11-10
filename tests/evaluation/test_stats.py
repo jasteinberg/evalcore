@@ -206,6 +206,8 @@ def test_multiple_comparisons_exact_rejection_sets():
                                                     True, False]
     assert holm(p, 0.05).tolist() == [False, True, False, False, False]
     assert holm([0.9] * 5).sum() == 0
+    with pytest.raises(ValueError, match="NaN"):     # was [True, True]
+        holm([0.001, float("nan")])
 
 
 def test_bh_is_step_up_not_step_down():

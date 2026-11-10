@@ -41,7 +41,13 @@ from .analyses import Analysis, AnalysisContext, attrition_table, summary
 from .core.backends import Backend, Cache, request_key
 from .core.calibrate import Calibration, calibrate, derive
 from .core.events import events_path, summarize_events
-from .core.records import manifest_path, to_frame, utc_now, write_atomic
+from .core.records import (
+    SinkState,
+    manifest_path,
+    to_frame,
+    utc_now,
+    write_atomic,
+)
 from .core.runner import Plan, execute, plan, rendered
 from .core.shards import check_shard, combine_shards, shard_of, shard_path
 from .core.spec import Cell, Unit, digest
@@ -156,7 +162,8 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     from all the shard sinks), so n shards cannot spend n times it."""
     o = exp.options
     p = plan(exp.planned(), exp.backend, exp.task.render, exp.out, o.resume,
-             o.retry_errors, score_version=exp.task.version)
+             o.retry_errors, score_version=exp.task.version,
+             batch_size=batch_size_for(exp, res))
     cache = exp.cache()
 
     def calls(q: Plan) -> int:
@@ -207,13 +214,31 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
         res.halted = "dry run only"
 
 
+def batch_size_for(exp: Experiment, res: Results) -> int:
+    """The batch size this invocation runs at: the explicit option, else,
+    for a local model (whose numerics padding can change) the one the sink's
+    rows were already made at, else calibration's, else 1.  Reusing the
+    sink's keeps a resume from re-deriving a different size after the
+    calibration expires and redoing every row (plan treats a row of another
+    batch size as stale for such a backend)."""
+    o = exp.options
+    if o.batch_size is not None:
+        return o.batch_size
+    if exp.backend.supports_target:
+        made = Counter(b for b in SinkState(exp.out).batch.values()
+                       if b is not None)
+        if made:
+            return made.most_common(1)[0][0]
+    return res.settings.get("batch_size") or 1
+
+
 def execute_stage(exp: Experiment, res: Results) -> None:
     o, s = exp.options, res.settings
     res.frame = execute(
         exp.units(), exp.backend, exp.task.render, exp.task.score, exp.out,
         cache=exp.cache(),
         workers=s.get("workers") or o.workers or 8,
-        batch_size=s.get("batch_size") or o.batch_size or 1,
+        batch_size=batch_size_for(exp, res),
         attempts=o.attempts, resume=o.resume, retry_errors=o.retry_errors,
         limit=o.limit, events=o.events, shard=exp.shard,
         score_version=exp.task.version)
@@ -381,7 +406,7 @@ class Experiment:
         if self.shard is not None:
             raise ValueError("merge the unsharded experiment, not a shard")
         assert isinstance(self.out, Path)
-        self._check_shard_jobs(n)
+        shard_status = self._check_shard_jobs(n)
         combine_shards(self.out, n)
         res = Results(self.out, job_hash=self.job_hash())
         res.frame = to_frame(self.out)
@@ -392,16 +417,21 @@ class Experiment:
         prov = checkout()
         res.marker = {"job_hash": res.job_hash, "status": status,
                       "halted": None, "counts": counts,
-                      "merged_from": n, "finished_at": utc_now(),
+                      "merged_from": n, "shards": shard_status,
+                      "finished_at": utc_now(),
                       "commit": prov["commit"], "dirty": prov["dirty"]}
         write_marker(self.path("done"), res.marker)
         return res
 
-    def _check_shard_jobs(self, n: int) -> None:
+    def _check_shard_jobs(self, n: int) -> dict[str, str]:
         """Every shard that wrote anything ran THIS job: its marker holds
         the job hash this experiment gives that shard.  Otherwise (a model
         or default changed between the shards and the merge) the merge
-        would mark one job's rows complete under another job's hash."""
+        would mark one job's rows complete under another job's hash.
+        Returns each shard's marker status ("never started" without one),
+        so a merge says which shard is still running, halted or died: a
+        crashed shard's marker stays "running"."""
+        status: dict[str, str] = {}
         for i in range(n):
             shard = self.sharded(i, n)
             assert isinstance(shard.out, Path)
@@ -411,13 +441,16 @@ class Experiment:
                     raise ValueError(
                         f"shard {i}: {shard.out.name} has rows but no "
                         f"marker, so which job it ran is unknown")
-                continue                    # never started: counted missing
+                status[str(i)] = "never started"   # its units: missing
+                continue
             if marker["job_hash"] != shard.job_hash():
                 raise ValueError(
                     f"shard {i} ran job {marker['job_hash']}, but this config "
                     f"gives that shard job {shard.job_hash()}: the config "
                     f"changed since the shards ran. Rerun them, or merge with "
                     f"the config they ran")
+            status[str(i)] = marker["status"]
+        return status
 
     def calibration_path(self) -> Path:
         """`<out>.calibration.json`, the unsharded `out` under a shard, so a
@@ -466,9 +499,12 @@ class Experiment:
         Items enter in full, so a gold answer that never reaches the prompt
         still changes the job.  The request keys cover each rendered prompt
         (a template edit with no version bump), the backend's identity and
-        defaults, and the repeat index.  batch_size enters because padding
-        can change a local model's numerics, and limit because it changes
-        which units are planned.  Workers, retries, caching and the code
+        defaults, and the repeat index.  An explicit batch_size enters
+        because padding can change a local model's numerics; a calibrated
+        one is not known yet when the hash is taken, so every row records
+        the batch size it was made at and `plan` redoes a local model's rows
+        made at another (see `batch_size_for`).  limit enters because it
+        changes which units are planned.  Workers, retries, caching and the code
         commit do not: they change how a result is obtained, not what it is
         (the commit is recorded in the marker)."""
         o = self.options

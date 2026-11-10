@@ -235,3 +235,14 @@ def test_abstain_option_is_checked():
 def test_without_the_option_nothing_changes():
     out = grade({"name": "numeric", "tol": 0}, "42", 42)
     assert "wrong" not in out and "abstained" not in out
+
+
+@pytest.mark.parametrize("text, gold, correct", [
+    ("The roots are 2,3", 3, 1.0),        # a list: last number is 3
+    ("candidates 7,8", 78, 0.0),          # not seventy-eight
+    ("about 1,234 people", 1234, 1.0),    # a thousands separator
+    ("12,345,678 total", 12345678, 1.0),
+    ("pick 1,2345", 2345, 1.0),           # four digits after: two numbers
+])
+def test_a_comma_groups_thousands_only_before_three_digits(text, gold, correct):
+    assert grade("numeric", text, gold)["correct"] == correct

@@ -61,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         res = exp.merge(a.shards)
         print(f"merged {a.shards} shards into {exp.out}: "
               f"{res.marker['status'] if res.marker else '?'}")
+        for i, st in (res.marker or {}).get("shards", {}).items():
+            if st != "complete":
+                print(f"  shard {i}: {st}")
         for name, table in res.analysis.items():
             print(f"\n{name}:\n{table.to_string(index=False)}")
         print(f"\nreport: {res.report_path}")

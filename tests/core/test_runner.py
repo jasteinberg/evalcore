@@ -606,3 +606,79 @@ def test_nested_numpy_in_meta_survives_the_cache(tmp_path):
         cache=Cache(tmp_path / "cache"))
     d = raw_rows(out)[-1]["meta_d"]
     assert d == {"x": 0.5} and isinstance(d["x"], float)
+
+
+def test_meta_json_cannot_hold_is_stored_as_its_string_with_a_cache(tmp_path):
+    """A date in meta.  The cache used to json.dumps it bare and raise after
+    the call was paid for, losing the row.  Now: 3 rows, each with the
+    date's string, and a rerun from the cache gives the same rows."""
+    import datetime
+
+    from evalcore import FunctionBackend, Item, Response, execute, grid, units
+    calls: list[str] = []
+
+    def model(req):
+        calls.append(req.unit_id)
+        return Response(req.unit_id, "a", {"when": datetime.date(2026, 1, 1)})
+
+    be = FunctionBackend(model, identity={"m": "dated"})
+    us = list(units(grid({"m": ["x"]}), [Item(f"i{k}", {}) for k in range(3)]))
+    rend = lambda u: Request(u.id, [{"role": "user", "content": u.item.item_id}], {})  # noqa: E731
+    cache = Cache(tmp_path / "cache")
+    df = execute(us, be, rend, lambda u, r: {"when": r.meta["when"]},
+                 tmp_path / "a.jsonl", cache=cache, workers=1)
+    assert len(df) == 3 and (df["meta_when"] == "2026-01-01").all()
+    assert (df["when"] == "2026-01-01").all()          # the scorer saw a str
+    again = execute(us, be, rend, lambda u, r: {"when": r.meta["when"]},
+                    tmp_path / "b.jsonl", cache=cache, workers=1)
+    assert len(calls) == 3 and again["cached"].all()
+    assert (again["meta_when"] == "2026-01-01").all()
+
+
+class _LocalModel(FunctionBackend):
+    """A backend whose numerics padding could change (as a local model's)."""
+    supports_target = True
+
+
+def _batch_run(tmp_path, be, batch_size):
+    from evalcore import Item, execute, grid, units
+    us = list(units(grid({"m": ["x"]}), [Item(f"i{k}", {}) for k in range(4)]))
+    rend = lambda u: Request(u.id, [{"role": "user", "content": u.item.item_id}], {})  # noqa: E731
+    return execute(us, be, rend, lambda u, r: {}, tmp_path / "r.jsonl",
+                   workers=1, batch_size=batch_size)
+
+
+def test_a_local_models_rows_from_another_batch_size_are_redone(tmp_path):
+    """4 units at batch 1, then at batch 2: a local model redoes all 4 (8
+    calls), and every final row says batch 2.  An API backend, whose
+    results do not depend on batching, redoes none (4 calls)."""
+    for cls, want in ((_LocalModel, 8), (FunctionBackend, 4)):
+        calls: list[str] = []
+        be = cls(lambda r, c=calls: c.append(r.unit_id) or "a",
+                 identity={"m": cls.__name__})
+        d = tmp_path / cls.__name__
+        d.mkdir()
+        _batch_run(d, be, 1)
+        df = _batch_run(d, be, 2)
+        assert len(calls) == want, cls.__name__
+        assert set(df["batch_size"]) == ({2} if want == 8 else {1})
+
+
+def test_a_resume_keeps_the_batch_size_the_rows_were_made_at(tmp_path):
+    """No explicit batch_size: for a local model the pipeline reuses the
+    sink's batch size (here 4) rather than calibration's (here 1)."""
+    from evalcore import Item, grid
+    from evalcore.pipeline import Experiment, Results, RunOptions, batch_size_for
+    from evalcore.tasks.base import Task
+    items = [Item(f"i{k}", {"messages": [{"role": "user", "content": "q"}]})
+             for k in range(4)]
+    be = _LocalModel(lambda r: "a", identity={"m": "local"})
+    exp = Experiment(Task("t", items), be, grid({"m": ["x"]}),
+                     tmp_path / "e.jsonl", calibrate=None,
+                     options=RunOptions(workers=1))
+    res = Results(exp.out, settings={"batch_size": 1})
+    assert batch_size_for(exp, res) == 1               # empty sink
+    exp.out.write_text("".join(
+        json.dumps({"unit_id": f"u{k}", "request_key": "k",
+                    "batch_size": 4}) + "\n" for k in range(3)))
+    assert batch_size_for(exp, res) == 4

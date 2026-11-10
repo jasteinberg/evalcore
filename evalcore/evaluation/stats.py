@@ -366,8 +366,13 @@ def benjamini_hochberg(p: Sequence[float], q: float = 0.05) -> np.ndarray:
 
 
 def holm(p: Sequence[float], alpha: float = 0.05) -> np.ndarray:
-    """Holm-Bonferroni step-down.  Controls FWER, no independence assumed."""
+    """Holm-Bonferroni step-down.  Controls FWER, no independence assumed.
+    A NaN p-value is refused: `pv > threshold` is False for NaN, so it would
+    be rejected, and dropping it would shrink m and loosen every threshold."""
     pv = np.asarray(p, dtype=float)
+    if np.isnan(pv).any():
+        raise ValueError(f"holm: {int(np.isnan(pv).sum())} NaN p-value(s). "
+                         f"Resolve or drop them, and say so")
     m = pv.size
     order = np.argsort(pv)
     out = np.zeros(m, dtype=bool)

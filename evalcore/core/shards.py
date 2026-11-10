@@ -170,9 +170,12 @@ def combine_shards(out: str | Path, n: int) -> Path:
             if isinstance(rec, dict) and rec.get("unit_id") not in seen:
                 seen.add(rec["unit_id"])
                 plan.append(json.dumps(rec) + "\n")
-    write_atomic(out, lambda tmp: tmp.write_text(rows))
+    # bytes, not text: text mode would translate newlines on Windows and
+    # the digest below would never match the file again
+    data = rows.encode()
+    write_atomic(out, lambda tmp: tmp.write_bytes(data))
     write_atomic(manifest_path(out), lambda tmp: tmp.write_text("".join(plan)))
     write_atomic(mark, lambda tmp: tmp.write_text(json.dumps(
         {"n": n, "shards": [p.name for p in paths if p.exists()],
-         "sha256": hashlib.sha256(rows.encode()).hexdigest()})))
+         "sha256": hashlib.sha256(data).hexdigest()})))
     return out

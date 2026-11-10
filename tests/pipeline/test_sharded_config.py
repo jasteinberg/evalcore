@@ -142,3 +142,31 @@ def test_a_remerge_keeps_rows_a_resume_added_after_the_merge(tmp_path):
     with pytest.raises(FileExistsError, match="changed since it was merged"):
         main(["merge", str(cfg), "--shards", str(N)])
     assert out.read_text() == before
+
+
+def test_merge_says_which_shard_is_not_complete(tmp_path, capsys):
+    """Shards 0 and 2 ran, 1 never started: the marker lists each shard's
+    status and the command prints the one that is not complete."""
+    from evalcore.pipeline import read_marker
+    cfg, out = config(tmp_path, "s")
+    for i in (0, 2):
+        main(["run", str(cfg), "--shard", f"{i}/{N}"])
+    capsys.readouterr()
+    main(["merge", str(cfg), "--shards", str(N)])
+    assert "shard 1: never started" in capsys.readouterr().out
+    marker = read_marker(out.with_name(out.name + ".done"))
+    assert marker["shards"] == {"0": "complete", "1": "never started",
+                                "2": "complete"}
+
+
+def test_the_merge_digest_is_of_the_bytes_on_disk(tmp_path):
+    """The recorded sha256 is the digest of the merged file's bytes, so a
+    re-merge of an untouched merge is accepted on any platform."""
+    import hashlib
+    cfg, out = config(tmp_path, "s")
+    for i in range(N):
+        main(["run", str(cfg), "--shard", f"{i}/{N}"])
+    main(["merge", str(cfg), "--shards", str(N)])
+    mark = json.loads(out.with_name(out.name + ".shards.json").read_text())
+    assert mark["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
+    assert main(["merge", str(cfg), "--shards", str(N)]) == 0

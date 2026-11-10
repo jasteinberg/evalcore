@@ -94,7 +94,7 @@ Score = Callable[[Unit, Response], dict[str, Any]]
 RUNNER_COLUMNS = frozenset({
     "cell_id", "item_id", "cluster", "group", "repeat", "unit_id", "text",
     "error", "cached", "request_key", "status", "parse_error",
-    "score_version"})
+    "score_version", "batch_size"})
 
 
 class ParseFailure(ValueError):
@@ -146,7 +146,8 @@ def rendered(render: Render, u: Unit) -> Request:
 
 def plan(units: Iterable[Unit], backend: Backend, render: Render,
          out: str | Path, resume: bool = True, retry_errors: bool = True,
-         limit: int | None = None, score_version: str | None = None) -> Plan:
+         limit: int | None = None, score_version: str | None = None,
+         batch_size: int | None = None) -> Plan:
     """Decide what an invocation must run.
 
     A unit counts as done only if its last row is a result: one whose
@@ -160,7 +161,11 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
 
     With `score_version` given, a unit that is done but whose last row was
     scored under another version (or none) goes to `rescore`: its response
-    is read back from the row and scored again, without a call."""
+    is read back from the row and scored again, without a call.
+
+    With `batch_size` given and a backend whose numerics padding can change
+    (`supports_target`: a local model), a row made at another batch size
+    (or an unrecorded one) is stale, so one sink never mixes batch sizes."""
     units = list(units)[:limit]
     _refuse_clashes(units)
     keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
@@ -174,6 +179,10 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
             p.retried += 1
             p.todo.append(u)
         elif state.seen[u.id] != keys[u.id]:    # incl. a row with no key
+            p.stale += 1
+            p.todo.append(u)
+        elif (batch_size is not None and backend.supports_target
+              and state.batch.get(u.id) != batch_size):
             p.stale += 1
             p.todo.append(u)
         elif (score_version is not None and u.id not in state.errored
@@ -219,8 +228,9 @@ def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
             f"write interrupted by a crash?). Their units will be re-run")
     if p.stale:
         say(f"{p.stale} finished units were made from a different request "
-            f"(prompt, item, backend or its defaults changed). Re-running "
-            f"them, and the new rows supersede the old")
+            f"(prompt, item, backend or its defaults changed, or a local "
+            f"model's batch size). Re-running them, and the new rows "
+            f"supersede the old")
     if p.retried:
         say(f"{p.retried} units errored last time. Retrying them "
             f"(retry_errors=False keeps error rows as final)")
@@ -353,7 +363,8 @@ def _sidecar(ctx: _Context, rkey: str) -> str:
 
 
 def _row(u: Unit, rkey: str, rp: Response, score: Score,
-         score_version: str | None = None) -> dict[str, Any]:
+         score_version: str | None = None,
+         batch_size: int | None = None) -> dict[str, Any]:
     """The result row: identity columns, the response, a status, and the
     scores -- which only an `ok` response gets."""
     meta = rp.meta or {}
@@ -361,6 +372,8 @@ def _row(u: Unit, rkey: str, rp: Response, score: Score,
            "request_key": rkey, **{f"meta_{k}": v for k, v in meta.items()}}
     if score_version is not None:
         row["score_version"] = score_version
+    if batch_size is not None:
+        row["batch_size"] = batch_size
     if not rp.ok:
         # a tool's infrastructure failing is not the model failing
         row["status"] = "tool_error" if meta.get("tool_error") else "error"
@@ -398,7 +411,7 @@ def _batch(ctx: _Context, batch: Sequence[Unit]) -> None:
     rkeys = [ctx.keys[u.id] for u in batch]
     resps = _call(ctx, [rendered(ctx.render, u) for u in batch], rkeys)
     for u, rk, rp in zip(batch, rkeys, resps, strict=True):
-        row = _row(u, rk, rp, ctx.score, ctx.score_version)
+        row = _row(u, rk, rp, ctx.score, ctx.score_version, ctx.batch_size)
         ctx.sink.write(row)
         meta = rp.meta or {}
         ctx.emit("unit", unit_id=u.id, status=row["status"], cached=rp.cached,
@@ -449,7 +462,8 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         si, sn = check_shard(shard)
         mine = lambda uid: shard_of(uid, sn) == si    # noqa: E731
     p = plan([u for u in everything if mine(u.id)], backend, render, out,
-             resume, retry_errors, score_version=score_version)
+             resume, retry_errors, score_version=score_version,
+             batch_size=batch_size)
     mpath = (None if manifest is False or manifest is None
              else manifest_path(out) if manifest is True else Path(manifest))
     if mpath is not None:
@@ -470,7 +484,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
              identity=digest(backend.identity()), out=str(out))
     for u in p.rescore:                   # no call: score the stored response
         row = _row(u, p.keys[u.id], _response_of(p.rows[u.id]), score,
-                   score_version)
+                   score_version, p.rows[u.id].get("batch_size"))
         ctx.sink.write(row)
         ctx.emit("rescore", unit_id=u.id, status=row["status"])
     batches = [p.todo[i:i + max(1, batch_size)]

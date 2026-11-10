@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -431,8 +432,21 @@ class HTTPBackend(Backend):
         # rate-limit headers of the latest response, verbatim, for
         # calibration, replaced (not merged) on every response
         self.last_rate_limits: dict[str, str] = {}
-        self.client = httpx.Client(base_url=self.base_url,
-                                   headers=headers, timeout=timeout)
+        self._client_args: dict[str, Any] = {
+            "base_url": self.base_url, "headers": headers, "timeout": timeout}
+        self._client_lock = threading.Lock()
+        self.client = httpx.Client(**self._client_args)
+
+    def _http(self) -> Any:
+        """The client, reopened if `close` closed it: `execute` closes its
+        backend at the end, and the same backend may run again in this
+        process (a retry of the error rows, a notebook re-run, several
+        shards in one loop).  Without this every call then failed."""
+        import httpx
+        with self._client_lock:
+            if self.client.is_closed:
+                self.client = httpx.Client(**self._client_args)
+            return self.client
 
     def identity(self) -> dict[str, Any]:
         # extra_headers are left out on purpose: they carry auth and
@@ -448,7 +462,7 @@ class HTTPBackend(Backend):
         path, body = self.adapt(model, req.messages, params, req.tools)
         t0 = time.perf_counter()
         try:
-            r = self.client.post(path, json=body)
+            r = self._http().post(path, json=body)
         except httpx.HTTPError as exc:
             raise Transient(f"transport: {exc}") from exc
         dt = time.perf_counter() - t0

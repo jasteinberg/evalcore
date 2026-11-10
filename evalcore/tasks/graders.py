@@ -117,7 +117,10 @@ def contains(text: str, gold: Any, case: bool = False,
     return {"correct": float(any(g in t for g in golds))}
 
 
-_NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?|-?\.\d+")
+# a comma is a thousands separator only before exactly three digits, so
+# "1,234" is one number and "2,3" (a list) is two
+_NUM = re.compile(r"-?\d{1,3}(?:,\d{3})+(?!\d)(?:\.\d+)?|-?\d+(?:\.\d+)?"
+                  r"|-?\.\d+")
 
 
 @grader("numeric")
@@ -125,7 +128,8 @@ def numeric(text: str, gold: Any, tol: float = 0.0, rel: float = 0.0,
             pick: str = "last") -> dict[str, Any]:
     """Compare the first or last number in the text with the gold:
     correct iff |x - g| <= max(tol, rel |g|).  Thousands separators are
-    removed ("1,234" is 1234).  No number at all is a parse failure."""
+    removed ("1,234" is 1234), and only those: "2,3" is two numbers.  No
+    number at all is a parse failure."""
     if pick not in ("first", "last"):
         raise ValueError(f"numeric: pick must be 'first' or 'last', not {pick!r}")
     g = float(gold)

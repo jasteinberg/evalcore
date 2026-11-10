@@ -67,6 +67,7 @@ class SinkState:
         # each unit's last row, for a re-score (only when asked: memory)
         self.rows: dict[str, Mapping[str, Any]] = {}
         self.keep_rows = keep_rows
+        self.batch: dict[str, int | None] = {}     # batch size of the last row
         rows, self.unreadable = (read_jsonl(path) if Path(path).exists()
                                  else ([], 0))
         for row in rows:
@@ -78,6 +79,7 @@ class SinkState:
     def note(self, row: Mapping[str, Any]) -> None:
         uid = row["unit_id"]
         self.seen[uid] = row.get("request_key")
+        self.batch[uid] = row.get("batch_size")
         if self.keep_rows:
             self.rows[uid] = row
         if row.get("error"):
@@ -283,7 +285,7 @@ def read_manifest(path: str | Path) -> pd.DataFrame:
     if not recs:
         return pd.DataFrame()
     return (pd.DataFrame(recs)
-            .drop_duplicates(subset="unit_id", keep="last")
+            .drop_duplicates(subset="unit_id", keep="first")   # as written
             .reset_index(drop=True))
 
 
@@ -356,15 +358,18 @@ def json_default(o: object) -> object:
 
 def _plain(v: object) -> object:
     """`v` with every numpy/torch scalar, at any depth of dicts, lists and
-    tuples, made a Python number, and nested arrays made lists, so the
-    cache (plain `json.dumps`) and the sink store the same thing."""
+    tuples, made a Python number, nested arrays made lists, and anything
+    else JSON cannot hold (a date, a Path, a set) made its string, so the
+    cache (plain `json.dumps`) and the sink store the same thing, and a
+    scorer sees the same meta on a fresh call as on a cache hit.  Without
+    the last step a cache write raised after the call was paid for."""
     if isinstance(v, dict):
         return {k: _plain(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
         return [_plain(x) for x in v]
-    if _is_tensor(v) or isinstance(v, (np.generic, np.ndarray)):
-        return json_default(v)
-    return v
+    if v is None or isinstance(v, (str, bool, int, float)):
+        return v
+    return json_default(v)
 
 
 def _as_array(v: object) -> np.ndarray | None:

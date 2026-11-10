@@ -42,4 +42,7 @@ def mock_http(flavour: str,
     be.client = httpx.Client(base_url=real.base_url, headers=real.headers,
                              transport=httpx.MockTransport(record))
     real.close()
+    # a client reopened after close() must reach the same scripted server
+    be._client_args = {**be._client_args,
+                       "transport": httpx.MockTransport(record)}
     return be, seen

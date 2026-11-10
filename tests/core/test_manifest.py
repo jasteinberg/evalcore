@@ -407,3 +407,16 @@ def test_sink_records_are_one_write_each_and_close_is_idempotent(tmp_path,
     log.close()                                   # second close is a no-op
     assert [json.loads(p) for p in payloads] == recs
     assert all(p.count(b"\n") == 1 and p.endswith(b"\n") for p in payloads)
+
+
+def test_read_manifest_keeps_a_units_first_record(tmp_path):
+    """write_manifest says the first record of a unit_id wins; two appenders
+    can both write one unit, and the reader must agree with the writer
+    (and with merge_shards, which keeps the first too)."""
+    import json as _json
+
+    from evalcore import read_manifest
+    p = tmp_path / "m.jsonl"
+    p.write_text(_json.dumps({"unit_id": "u1", "tag": "first"}) + "\n"
+                 + _json.dumps({"unit_id": "u1", "tag": "second"}) + "\n")
+    assert read_manifest(p)["tag"].tolist() == ["first"]

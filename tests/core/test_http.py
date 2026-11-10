@@ -453,3 +453,15 @@ def test_a37_a_transient_failure_then_200_succeeds_on_the_second_call(
     r = with_retries(be.complete, Request("u", Q, {}), attempts=5)
     assert r.ok, r.error
     assert r.text == "hi" and len(seen) == 2
+
+
+def test_a_closed_backend_reopens_its_client():
+    """`execute` closes its backend, and the same Experiment may run again
+    in the process (retrying error rows).  The second call must reach the
+    server, not fail with "the client has been closed"."""
+    be, seen = mock_http("anthropic", lambda req: httpx.Response(
+        200, json=OK_REPLY["anthropic"]))
+    assert be.complete(Request("u", Q, {})).text == "hi"
+    be.close()
+    assert be.complete(Request("u", Q, {})).text == "hi"
+    assert len(seen) == 2
