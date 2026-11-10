@@ -105,3 +105,22 @@ def test_gold_documents_contain_the_answer():
         text = " ".join(world.docs[d] for d in it.payload["gold_docs"])
         gold = it.payload["gold"]
         assert (f"{gold:,}" if isinstance(gold, int) else gold) in text
+
+
+def test_the_prompt_allows_abstaining_in_words_the_abstain_grader_reads():
+    """The prompt must not promise the answer is present (false under a
+    gold control that removes it), and its abstention phrase must be read
+    as an abstention, not left unparsed."""
+    import re
+
+    from evalcore.tasks.graders import grade
+    from evalcore.tasks.search_qa import SYSTEM
+    assert "answer is in it" not in SYSTEM
+    phrase = re.search(r"reply: (.+?)\.?$", SYSTEM).group(1)
+    assert grade("abstain", phrase, None)["abstained"] == 1.0
+
+
+
+def test_every_item_scores_three_outcomes():
+    task, _ = search_qa(n_towns=6)
+    assert all(it.payload["grader"]["abstain"] is True for it in task.items)

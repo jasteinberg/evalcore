@@ -201,7 +201,10 @@ def set_f1(text: str, gold: Sequence[str], pattern: str) -> dict[str, Any]:
 ABSTAIN_CUES = ("not mentioned", "no mention", "not in the", "does not contain",
                 "doesn't contain", "no information", "cannot answer",
                 "can't answer", "cannot be determined", "not present",
-                "does not appear", "no evidence", "unknown")
+                "does not appear", "no evidence", "unknown",
+                "unable to find", "could not find", "couldn't find",
+                "cannot find", "can't find", "not finding", "do not contain",
+                "don't contain")
 
 
 @grader("abstain")
@@ -210,14 +213,23 @@ def abstain(text: str, gold: Any = None,
     """For a question whose answer is NOT in the context: correct iff the
     response declines.  An answer here is a hallucination, a third outcome
     that "incorrect" would hide, so it is reported separately."""
-    t = normalize(_text(text), punct=True)
-    said = any(c in t for c in cues)
+    said = _declines(text, cues)
     return {"correct": float(said), "abstained": float(said),
             "hallucinated": float(not said)}
 
 
-def _parse(spec: str | Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """A grader spec as (name, options).  KeyError for an unknown name."""
+def _declines(text: str | None, cues: Sequence[str] = ABSTAIN_CUES) -> bool:
+    """Whether the response contains an abstention cue (ParseFailure if
+    empty).  The one test of abstaining, for the abstain grader and for
+    any grader spec with "abstain": true."""
+    t = normalize(_text(text), punct=True)
+    return any(c in t for c in cues)
+
+
+def _parse(spec: str | Mapping[str, Any]
+           ) -> tuple[str, dict[str, Any], bool]:
+    """A grader spec as (name, options, abstain).  KeyError for an unknown
+    name.  `abstain` is the spec's own key, not a grader option."""
     if isinstance(spec, str):
         name, opts = spec, {}
     else:
@@ -225,14 +237,37 @@ def _parse(spec: str | Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         name = opts.pop("name")
     if name not in GRADERS:
         raise KeyError(f"unknown grader {name!r}. Known: {sorted(GRADERS)}")
-    return name, opts
+    abst = opts.pop("abstain", False)
+    if not isinstance(abst, bool):
+        raise ValueError(f"grader spec 'abstain' must be true or false, "
+                         f"got {abst!r}")
+    if abst and name == "abstain":
+        raise ValueError("'abstain': true on the abstain grader itself")
+    return name, opts, abst
 
 
 def grade(spec: str | Mapping[str, Any], text: str | None,
           gold: Any) -> dict[str, Any]:
-    """Dispatch on a grader spec: a name, or {"name": ..., **options}."""
-    name, opts = _parse(spec)
-    return GRADERS[name](text, gold, **opts)
+    """Dispatch on a grader spec: a name, or {"name": ..., **options}.
+
+    With "abstain": true every response gets one of three outcomes,
+
+        abstained  the response declines (an abstain-grader cue)
+        correct    otherwise, the grader's verdict is right
+        wrong      otherwise, the grader's verdict is wrong
+
+    as 0/1 columns `abstained`, `correct`, `wrong` that sum to 1.  An
+    abstention is then a scored row with correct = 0, not an `unparsed`
+    one: when declining depends on the condition (a control that removes
+    the answer), dropping it would leave a survivor statistic.  A response
+    that declines AND states an answer counts as abstained."""
+    name, opts, abst = _parse(spec)
+    if abst and _declines(text):
+        return {"correct": 0.0, "wrong": 0.0, "abstained": 1.0}
+    out = GRADERS[name](text, gold, **opts)
+    if abst:
+        out = {**out, "wrong": 1.0 - out["correct"], "abstained": 0.0}
+    return out
 
 
 _NO_GOLD = object()
@@ -244,7 +279,7 @@ def check_spec(spec: str | Mapping[str, Any], gold: Any = _NO_GOLD) -> None:
     not take, a required option missing, or an option or gold value the
     grader itself rejects.  Raises KeyError for the name, ValueError for
     the rest, naming the offending key or value."""
-    name, opts = _parse(spec)
+    name, opts, _ = _parse(spec)
     fn = GRADERS[name]
     params = dict(inspect.signature(fn).parameters)
     for p in ("text", "gold"):

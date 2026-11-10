@@ -23,6 +23,10 @@ efficiency.  Run the
 same items with no tools for the closed-book baseline: accuracy there
 should sit at the floor, and the gap is what tool use buys.
 
+Each answer is scored as one of three outcomes, correct, wrong or
+abstained (grader specs carry "abstain": true, see graders.grade), so a
+refusal stays in the denominator instead of becoming an unparsed row.
+
 `search_qa(...)` returns the Task and a BM25 CorpusSearch over the corpus.
 Wrap a tool-capable backend as `AgentBackend(backend, [search.tool])`.
 Each item also carries `gold_docs`, the documents its answer composes, so
@@ -47,8 +51,14 @@ __all__ = ["World", "make_world", "search_qa", "search_qa_items"]
 _ON, _NUC, _CODA = ("b br d k l m n r s st t th v z".split(),
                     "a e i o u ae ia".split(), "n r s l th nd rn st".split())
 
-SYSTEM = ("Answer the question. You can search a document collection; the "
-          "answer is in it. Reply with the answer only.")
+# The prompt does not promise that the answer is in the collection: under a
+# gold control that removes its documents the promise is false, and it
+# pushes the model to answer from a near-name distractor instead of
+# declining.  The fixed abstention phrase is one of the `abstain` grader's
+# cues, so a refusal can be recognised rather than left unparsed.
+SYSTEM = ("Answer the question. You can search a document collection. Reply "
+          "with the answer only. If the documents do not contain the answer, "
+          "reply: cannot answer.")
 
 
 def _name(rng: random.Random, syllables: int = 2) -> str:
@@ -123,11 +133,12 @@ def search_qa_items(world: World, seed: int = 0) -> list[Item]:
     qs: list[tuple[str, str, Any, Any, int, list[str]]] = []
     for t, f in world.towns.items():
         qs.append(("pop", f"How many people live in {t}?", f["population"],
-                   {"name": "numeric", "tol": 0}, 1, [doc[t]]))
+                   {"name": "numeric", "tol": 0, "abstain": True}, 1,
+                   [doc[t]]))
     for r, f in world.rivers.items():
         qs.append(("river_pop", f"How many people live in the town where the "
                    f"{r} rises?", world.towns[f["source"]]["population"],
-                   {"name": "numeric", "tol": 0}, 2,
+                   {"name": "numeric", "tol": 0, "abstain": True}, 2,
                    [doc[r], doc[f["source"]]]))
     rivers = sorted(world.rivers)
     for p, f in world.people.items():
@@ -135,7 +146,7 @@ def search_qa_items(world: World, seed: int = 0) -> list[Item]:
         if river:
             qs.append(("person_river", f"Which river flows through the town "
                        f"where {p} was born?", river,
-                       {"name": "label", "options": rivers}, 2,
+                       {"name": "label", "options": rivers, "abstain": True}, 2,
                        [doc[p], doc[f["born"]]]))
     rng.shuffle(qs)
     return [Item(f"sqa{seed}-{k:04d}",

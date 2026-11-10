@@ -181,3 +181,57 @@ def test_check_spec_refuses_without_a_response(spec, gold, match):
 ])
 def test_check_spec_passes_a_sound_spec(spec, gold):
     check_spec(spec, gold)
+
+
+
+# --- three outcomes: correct, wrong, abstained -------------------------------
+
+NUM = {"name": "numeric", "tol": 0, "abstain": True}
+
+
+@pytest.mark.parametrize("text,want", [
+    ("42", (1, 0, 0)),
+    ("It is 41.", (0, 1, 0)),
+    ("cannot answer", (0, 0, 1)),
+    ("The documents do not contain this. Cannot answer.", (0, 0, 1)),
+    # phrasings Haiku used in the controls pilot
+    ("I'm unable to find any information about Vubarn Thiavaen.", (0, 0, 1)),
+    ("I could not find the town.", (0, 0, 1)),
+    ("I couldn't find it.", (0, 0, 1)),
+    ("I apologize, but I cannot find any information about him.", (0, 0, 1)),
+    ("I'm not finding any information about Vubarn Thiavaen.", (0, 0, 1)),
+    ("The search results don't contain information about him.", (0, 0, 1)),
+    # declines and also offers a value: counted as abstained, by definition
+    ("The closest match has 42. If you meant another place, I cannot "
+     "answer.", (0, 0, 1)),
+])
+def test_abstain_option_gives_three_outcomes_that_sum_to_one(text, want):
+    out = grade(NUM, text, 42)
+    assert (out["correct"], out["wrong"], out["abstained"]) == want
+
+
+def test_abstain_option_works_for_any_grader():
+    spec = {"name": "label", "options": ["Velor", "Askern"], "abstain": True}
+    assert grade(spec, "the Velor", "Velor")["correct"] == 1.0
+    assert grade(spec, "the Askern", "Velor")["wrong"] == 1.0
+    assert grade(spec, "no information", "Velor")["abstained"] == 1.0
+
+
+def test_abstain_option_still_leaves_unreadable_answers_unparsed():
+    with pytest.raises(ParseFailure):
+        grade(NUM, "", 42)
+    with pytest.raises(ParseFailure):
+        grade(NUM, "many people", 42)
+
+
+def test_abstain_option_is_checked():
+    check_spec(NUM, 42)
+    with pytest.raises(ValueError, match="true or false"):
+        grade({"name": "numeric", "abstain": "yes"}, "42", 42)
+    with pytest.raises(ValueError, match="abstain grader itself"):
+        grade({"name": "abstain", "abstain": True}, "x", None)
+
+
+def test_without_the_option_nothing_changes():
+    out = grade({"name": "numeric", "tol": 0}, "42", 42)
+    assert "wrong" not in out and "abstained" not in out
