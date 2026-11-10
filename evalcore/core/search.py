@@ -24,9 +24,9 @@ Ties are broken by document id everywhere, so a ranking is a function of
 the corpus and the query alone.
 
 `search_tool(retriever, docs)` turns any retriever into the agent loop's
-`search` tool, and `RetrieverBackend` runs a retriever through the runner
-(cache, resume, rows), so evaluation/retrieval.py can score it like any
-other model.
+`search` tool (`gold_search_tool` is the controls' version), and
+`RetrieverBackend` runs a retriever through the runner (cache, resume,
+rows), so evaluation/retrieval.py can score it like any other model.
 
 Indexes.  `ExactIndex` is brute-force cosine (or dot product) in numpy:
 exact, dependency-free, and fast enough to roughly 1e5-1e6 passages.
@@ -85,10 +85,11 @@ makes it cacheable.  The same (query, repeat) twice gives the same draw.
 Independent draws need distinct `repeat`, or a distinct `seed`.  Through
 the runner, `repeat` is the unit's: the runner sets Request.repeat and
 RetrieverBackend passes it on (a Reranker forwards it to its first stage).
-`search_tool` has no unit to read it from and draws at repeat 0, so an
-agent's searches for one query are the same draw in every repeat of the
-unit.  The noise comes from numpy's Generator, so it is bitwise
-reproducible within a numpy version but not promised across versions.
+In an agent episode, `search_tool` over a retriever that declares
+`uses_repeat` is a context tool (tools.py), so each repeat of a unit
+searches with its own repeat index.  The noise comes from numpy's
+Generator, so it is bitwise reproducible within a numpy version but not
+promised across versions.
 
 Controls.  Let pi be the base's full ranking of the corpus by (score desc,
 id asc), G the query's gold set, and |G| <= k.  Then
@@ -105,16 +106,19 @@ removed measures how much of the score depends on the gold text at all,
 and accuracy under removed is what the reader answers without it
 (parametric memory, or contamination).
 
-"none" is the base condition to compare the controls against, rather than the
-base retriever itself.  pi is the FULL ranking, from `score_all`, so a
+"none" is the base condition to compare the controls against, rather than
+the base retriever itself.  pi is the FULL ranking, from `score_all`, so a
 filler can be a document BM25.retrieve would drop (sharing no term with
 the query).  For a query that shares terms with fewer than k documents,
 BM25 alone returns fewer than k, and comparing it with the controls would
 mix the gold effect with a difference in context length.  For a dense base
-over an exact index, none(q) is exactly base.retrieve(q, k).  The gold set
-is looked up by the query string, so the controls fit a reader whose
-retrieval query is the item's own question, not an agent that writes its
-own searches.
+over an exact index, none(q) is exactly base.retrieve(q, k).
+
+GoldControl looks G up by the query string, so it fits a reader whose
+retrieval query is the item's own question.  An agent writes its own
+searches, and `gold_search_tool` applies the same three modes to each of
+them: pi is the base's ranking for the agent's query, and G is the gold set
+of the item the unit serves (`gold_by_item`), read from the tool's context.
 """
 
 from __future__ import annotations
@@ -136,7 +140,7 @@ import numpy as np
 from .backends.base import Backend, Request, Response
 from .embed import Embedder, EmbeddingCache, _checkpoint, _on_device
 from .spec import digest
-from .tools import Tool, ToolInputError
+from .tools import Tool, ToolContext, ToolInputError
 
 __all__ = [
     "BM25",
@@ -157,7 +161,9 @@ __all__ = [
     "SampledRetriever",
     "ScoredRetriever",
     "ann_recall",
+    "gold_by_item",
     "gold_by_query",
+    "gold_search_tool",
     "omp_clash",
     "search_tool",
 ]
@@ -209,6 +215,8 @@ def _top(scores: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
 
 class BM25:
     """Okapi BM25 (formula in the module docstring), exact."""
+
+    uses_repeat = False
 
     def __init__(self, docs: Mapping[str, str], k1: float = 1.2,
                  b: float = 0.75) -> None:
@@ -422,6 +430,8 @@ class DenseRetriever:
     With an approximate index, `ann_recall` is measured at build on
     `ann_queries` (or `ann_sample` documents) at depth `ann_k`."""
 
+    uses_repeat = False
+
     def __init__(self, docs: Mapping[str, str], embedder: Embedder,
                  index: Index | None = None, cache: EmbeddingCache | None = None,
                  ann_queries: Sequence[str] | None = None, ann_sample: int = 200,
@@ -549,6 +559,11 @@ class Reranker:
         self.first, self.scorer, self.depth = first, scorer, depth
         self.docs = dict(docs)
 
+    @property
+    def uses_repeat(self) -> bool:
+        """The first stage's: a reranked sampled draw is still a draw."""
+        return bool(getattr(self.first, "uses_repeat", False))
+
     def identity(self) -> dict[str, Any]:
         return {"retriever": "rerank", "first": self.first.identity(),
                 "scorer": self.scorer.identity(), "depth": self.depth}
@@ -592,6 +607,8 @@ class SampledRetriever:
     to exp(beta s_i), s_i the base retriever's score (law, limits and
     seeding rule in the module docstring).  `retrieve` satisfies Retriever;
     `draw` returns the same hits with the noise behind them."""
+
+    uses_repeat = True
 
     def __init__(self, base: ScoredRetriever, beta: float, seed: int) -> None:
         beta = float(beta)
@@ -672,6 +689,8 @@ class GoldControl:
     refused, never answered from the base alone, in every mode, so the
     three conditions run on the same queries."""
 
+    uses_repeat = False
+
     def __init__(self, base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
                  mode: str) -> None:
         if mode not in _CONTROL_MODES:
@@ -699,27 +718,38 @@ class GoldControl:
             return []
         ids, S = self.base.score_all(queries)
         S = np.asarray(S, np.float64)
-        n = len(ids)
-        col = {d: j for j, d in enumerate(ids)}
-        out = []
-        for q, s in zip(queries, S, strict=True):
-            unknown = [d for d in self.gold[q] if d not in col]
-            if unknown:
-                raise ValueError(f"gold ids not in the corpus for {q!r}: {unknown}")
-            g = {col[d] for d in self.gold[q]}
-            if self.mode == "oracle" and len(g) > k:
-                raise ValueError(f"{len(g)} gold documents for {q!r} do not fit "
-                                 f"in k = {k}")
-            order = _top(s[None, :], n)[0][0]      # score desc, id asc
-            rest = [j for j in order if j not in g]
-            if self.mode == "none":
-                pick = list(order[:k])
-            elif self.mode == "oracle":
-                pick = ([j for j in order if j in g] + rest)[:k]
-            else:
-                pick = rest[:k]
-            out.append([(ids[j], float(s[j])) for j in pick])
-        return out
+        return [_control_hits(ids, s, self.gold[q], self.mode, k, repr(q))
+                for q, s in zip(queries, S, strict=True)]
+
+
+def _control_hits(ids: list[str], s: np.ndarray, gold: Sequence[str],
+                  mode: str, k: int, label: str) -> list[Hit]:
+    """none / oracle / removed (module docstring) for one ranking: `s` is
+    every document's score, columns in `ids` order.  The one implementation,
+    for GoldControl and gold_search_tool alike."""
+    col = {d: j for j, d in enumerate(ids)}
+    unknown = [d for d in gold if d not in col]
+    if unknown:
+        raise ValueError(f"gold ids not in the corpus for {label}: {unknown}")
+    g = {col[d] for d in gold}
+    if mode == "oracle" and len(g) > k:
+        raise ValueError(f"{len(g)} gold documents for {label} do not fit "
+                         f"in k = {k}")
+    order = _top(s[None, :], len(ids))[0][0]      # score desc, id asc
+    rest = [j for j in order if j not in g]
+    if mode == "none":
+        pick = list(order[:k])
+    elif mode == "oracle":
+        pick = ([j for j in order if j in g] + rest)[:k]
+    else:
+        pick = rest[:k]
+    return [(ids[j], float(s[j])) for j in pick]
+
+
+def _gold_ids(item: Any, gold_field: str) -> list[str]:
+    """An item's gold doc ids, sorted: `payload[gold_field]` is a list of
+    ids or {id: gain}."""
+    return sorted(set(item.payload[gold_field]))
 
 
 def gold_by_query(items: Sequence[Any], gold_field: str = "gold_docs"
@@ -733,7 +763,7 @@ def gold_by_query(items: Sequence[Any], gold_field: str = "gold_docs"
         users = [m for m in it.payload["messages"] if m.get("role") == "user"]
         if not users:
             raise ValueError(f"item {it.item_id} has no user message")
-        q, g = users[-1]["content"], sorted(set(it.payload[gold_field]))
+        q, g = users[-1]["content"], _gold_ids(it, gold_field)
         if q in out and out[q] != g:
             raise ValueError(f"query {q!r} has two different gold sets: "
                              f"{out[q]} and {g}")
@@ -741,30 +771,97 @@ def gold_by_query(items: Sequence[Any], gold_field: str = "gold_docs"
     return out
 
 
+def gold_by_item(items: Sequence[Any], gold_field: str = "gold_docs"
+                 ) -> dict[str, list[str]]:
+    """{item_id: gold ids}, for gold_search_tool.  Duplicate item ids are
+    refused (the item id is the cluster label, so it must be unique)."""
+    out: dict[str, list[str]] = {}
+    for it in items:
+        if it.item_id in out:
+            raise ValueError(f"duplicate item id {it.item_id!r}")
+        out[it.item_id] = _gold_ids(it, gold_field)
+    return out
+
+
 # --- as a tool, and as a backend ------------------------------------------------------
+
+_SEARCH_DESCRIPTION = ("Search the document collection. Returns the best "
+                       "matching documents with their ids.")
+_SEARCH_PARAMETERS = {"type": "object",
+                      "properties": {"query": {"type": "string",
+                                               "description": "search terms"}},
+                      "required": ["query"]}
+
+
+def _query(args: Mapping[str, Any], name: str) -> str:
+    q = str(args["query"])
+    if not _WORD.search(q.lower()):
+        raise ToolInputError(f"{name}: empty query")
+    return q
+
+
+def _render_hits(hits: list[Hit], docs: Mapping[str, str]) -> str:
+    """A search tool's output: each hit as "[id] text"."""
+    if not hits:
+        return "No results."
+    return "\n\n".join(f"[{d}] {docs[d]}" for d, _ in hits)
+
 
 def search_tool(retriever: Retriever, docs: Mapping[str, str], k: int = 3,
                 name: str = "search") -> Tool:
     """The retriever as the agent loop's search tool: the top k documents,
     each as "[id] text".  The tool version is a digest of the retriever's
-    identity and k, so a changed corpus or retriever re-runs its rows."""
-    def run(args: Mapping[str, Any]) -> str:
-        q = str(args["query"])
-        if not _WORD.search(q.lower()):
-            raise ToolInputError(f"{name}: empty query")
-        hits = retriever.retrieve([q], k)[0]
-        if not hits:
-            return "No results."
-        return "\n\n".join(f"[{d}] {docs[d]}" for d, _ in hits)
+    identity and k, so a changed corpus or retriever re-runs its rows.
+
+    A retriever whose draw depends on the repeat index (`uses_repeat`, as
+    SampledRetriever and a Reranker over one declare) makes this a context
+    tool: each repeat of a unit then searches with its own repeat index.  A
+    retriever that does not declare it is deterministic by the Retriever
+    contract, and its searches keep sharing cached results across units."""
     ident = retriever.identity()
-    return Tool(name, "Search the document collection. Returns the best "
-                "matching documents with their ids.",
-                {"type": "object",
-                 "properties": {"query": {"type": "string",
-                                          "description": "search terms"}},
-                 "required": ["query"]},
-                run, version=f"{ident.get('retriever', 'search')}-"
-                             f"{digest({'retriever': ident, 'k': k})}")
+    version = (f"{ident.get('retriever', 'search')}-"
+               f"{digest({'retriever': ident, 'k': k})}")
+    if bool(getattr(retriever, "uses_repeat", False)):
+        def run_ctx(args: Mapping[str, Any], ctx: ToolContext) -> str:
+            return _render_hits(retriever.retrieve([_query(args, name)], k,
+                                                   repeat=ctx.repeat)[0], docs)
+        return Tool(name, _SEARCH_DESCRIPTION, _SEARCH_PARAMETERS, run_ctx,
+                    version=version, uses_context=True)
+
+    def run(args: Mapping[str, Any]) -> str:
+        return _render_hits(retriever.retrieve([_query(args, name)], k)[0], docs)
+    return Tool(name, _SEARCH_DESCRIPTION, _SEARCH_PARAMETERS, run,
+                version=version)
+
+
+def gold_search_tool(base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
+                     docs: Mapping[str, str], mode: str, k: int = 3,
+                     name: str = "search") -> Tool:
+    """The gold controls (module docstring) as an agent's search tool.  The
+    ranking is the base's for the agent's own query; the gold set is the
+    item's, looked up by the unit's item id in `gold` (gold_by_item builds
+    it).  An item with no entry is an error, never a plain search.  The
+    tool presents itself exactly as search_tool does, so the agent cannot
+    tell the conditions apart from the tool's name or description."""
+    if mode not in _CONTROL_MODES:
+        raise ValueError(f"mode must be one of {_CONTROL_MODES}, got {mode!r}")
+    if k < 1:
+        raise ValueError(f"k must be >= 1, got {k}")
+    gold_ids = {i: sorted(set(g)) for i, g in gold.items()}
+    ident = {"retriever": f"gold-{mode}", "base": base.identity(),
+             "gold": digest(gold_ids), "by": "item"}
+
+    def run(args: Mapping[str, Any], ctx: ToolContext) -> str:
+        q = _query(args, name)
+        if ctx.item_id not in gold_ids:
+            raise ValueError(f"{name}: no gold entry for item {ctx.item_id!r}")
+        ids, S = base.score_all([q])
+        s = np.asarray(S, np.float64)[0]
+        return _render_hits(_control_hits(ids, s, gold_ids[ctx.item_id], mode,
+                                          k, f"item {ctx.item_id!r}"), docs)
+    return Tool(name, _SEARCH_DESCRIPTION, _SEARCH_PARAMETERS, run,
+                version=f"gold-{mode}-{digest({'retriever': ident, 'k': k})}",
+                uses_context=True)
 
 
 class CorpusSearch:

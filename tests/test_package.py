@@ -23,7 +23,7 @@ PUBLIC = {
     "HTTPBackend", "HFBackend", "EchoBackend", "FunctionBackend",
     "AgentBackend", "Probe", "FunctionProbe", "Cache", "check_backend",
     "CheckReport", "with_retries",
-    "Tool", "ToolInputError", "ToolUnavailable",
+    "Tool", "ToolContext", "ToolInputError", "ToolUnavailable",
     "EmbeddingCache", "FunctionEmbedder", "HFEmbedder", "HTTPEmbedder",
     "BM25", "CorpusSearch", "DenseRetriever", "ExactIndex", "FaissIndex",
     "RetrieverBackend", "Reranker", "FunctionScorer", "HFCrossEncoder",

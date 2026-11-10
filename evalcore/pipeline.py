@@ -39,7 +39,7 @@ from .core.backends import Backend, Cache, request_key
 from .core.calibrate import Calibration, calibrate, derive
 from .core.events import events_path, summarize_events
 from .core.records import manifest_path, to_frame, utc_now, write_atomic
-from .core.runner import Plan, execute, plan
+from .core.runner import Plan, execute, plan, rendered
 from .core.spec import Cell, Unit, digest
 from .tasks.base import Task
 
@@ -110,7 +110,7 @@ def calibrate_stage(exp: Experiment, res: Results) -> None:
         interleaved = [u for group in zip_longest(*by_cell.values())
                        for u in group if u is not None]
         k = 32 if exp.backend.supports_target else exp.options.calibrate_n
-        sample = [exp.task.render(u) for u in interleaved[:k]]
+        sample = [rendered(exp.task.render, u) for u in interleaved[:k]]
         cal = calibrate(exp.backend, sample, n=exp.options.calibrate_n)
         path.write_text(json.dumps(cal.to_dict(), indent=1))
     res.calibration = cal
@@ -273,7 +273,7 @@ class Experiment:
         refused: dict[str, list[str]] = {}
         all_units = self.units()
         for u in all_units:
-            problem = self.backend.refusal(self.task.render(u))
+            problem = self.backend.refusal(rendered(self.task.render, u))
             if problem:
                 refused.setdefault(problem, []).append(u.id)
         if refused:
@@ -337,7 +337,8 @@ class Experiment:
         not: they change how a result is obtained, not what it is (the
         commit is recorded in the marker)."""
         o = self.options
-        keys = sorted(request_key(self.task.render(u), u.repeat, self.backend)
+        keys = sorted(request_key(rendered(self.task.render, u), u.repeat,
+                                  self.backend)
                       for u in self.planned())
         return digest({
             "task": self.task.name, "task_version": self.task.version,

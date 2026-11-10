@@ -95,7 +95,7 @@ from .core.search import (
     search_tool,
 )
 from .core.spec import Cell, Item, Unit, canonical, digest, grid, units
-from .core.tools import Tool, ToolInputError, ToolUnavailable
+from .core.tools import Tool, ToolContext, ToolInputError, ToolUnavailable
 from .evaluation.attrition import attrition
 from .evaluation.baselines import (
     floors,
@@ -150,7 +150,7 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     "AgentBackend", "Probe", "FunctionProbe", "Cache", "check_backend",
     "CheckReport", "with_retries",
     # tools
-    "Tool", "ToolInputError", "ToolUnavailable",
+    "Tool", "ToolContext", "ToolInputError", "ToolUnavailable",
     # retrieval
     "EmbeddingCache", "FunctionEmbedder", "HFEmbedder", "HTTPEmbedder",
     "BM25", "CorpusSearch", "DenseRetriever", "ExactIndex", "FaissIndex",

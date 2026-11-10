@@ -51,9 +51,11 @@ def test_request_fields_are_the_ones_the_cache_key_covers():
     cache_key is taught about it -- a field outside the key is a stale hit."""
     assert {f.name for f in dataclasses.fields(Request)} == {
         "unit_id", "messages", "params", "target", "tools", "input_ids",
-        "candidates", "repeat"}
-    # `repeat` is the exception: request_key covers it (below), and putting
-    # it in cache_key as well would move every existing key with repeat >= 1
+        "candidates", "repeat", "item_id"}
+    # `repeat` and `item_id` are the exceptions: request_key covers the
+    # repeat (below) and the item through Backend.key_context, for a backend
+    # whose output depends on it.  In cache_key they would move every
+    # existing key.
 
 
 def test_request_key_moves_with_repeat_and_refuses_a_conflicting_one():

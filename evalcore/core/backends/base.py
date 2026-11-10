@@ -57,10 +57,12 @@ class Request:
     set of token ids.  These need a backend that reads logits
     (`supports_target`, i.e. `HFBackend`).
 
-    `repeat` is the unit's repeat index, set by the runner, for a backend
-    whose output is a seeded function of it (a sampled retriever).  It is
-    not in `cache_key`: `request_key` adds the repeat itself, so keys are
-    the same with or without this field."""
+    `repeat` and `item_id` are the unit's repeat index and item, set by the
+    runner, for a backend whose output depends on them (a sampled
+    retriever, an agent whose tools read the unit: see Tool.uses_context).
+    Neither is in `cache_key`: `request_key` adds the repeat itself, and the
+    item through `Backend.key_context` only for a backend that reads it, so
+    every other key is the same with or without these fields."""
 
     unit_id: str
     messages: Sequence[Mapping[str, Any]]
@@ -70,6 +72,7 @@ class Request:
     input_ids: Sequence[int] | None = None
     candidates: Sequence[int] | None = None
     repeat: int = 0
+    item_id: str | None = None
 
     @property
     def cache_key(self) -> str:
@@ -216,6 +219,13 @@ class Backend:
                 "default_params": dict(getattr(self, "default_params", {})
                                        or {})}
 
+    def key_context(self, req: Request) -> dict[str, Any] | None:
+        """What of the unit beyond the request itself changes this backend's
+        response, or None.  `request_key` adds it to the key when it is not
+        None, so a backend that returns None (every backend but an agent
+        with context tools) keeps exactly the keys it had."""
+        return None
+
     def refusal(self, req: Request) -> str | None:
         """Why this backend cannot serve `req` at all, or None.
 
@@ -285,8 +295,12 @@ def request_key(req: Request, repeat: int, backend: Backend) -> str:
     if req.repeat not in (0, repeat):
         raise ValueError(f"request {req.unit_id} carries repeat={req.repeat} "
                          f"but is keyed with repeat={repeat}")
-    return digest({"request": req.cache_key, "backend": backend.identity(),
-                   "repeat": repeat})
+    key: dict[str, Any] = {"request": req.cache_key,
+                           "backend": backend.identity(), "repeat": repeat}
+    ctx = backend.key_context(req)
+    if ctx is not None:                  # absent, so existing keys still hold
+        key["context"] = ctx
+    return digest(key)
 
 
 def with_retries(fn: Callable[[Request], Response], req: Request,

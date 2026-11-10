@@ -23,6 +23,12 @@ Outcomes, and the row status each becomes:
 Tool results can be cached content-addressed on (tool identity,
 arguments).  With live tools -- a web search whose results drift -- that
 cache is what makes a rerun see the same results, so pass one.
+
+A context tool (Tool.uses_context, see tools.py) is also given the unit it
+serves, and its cached results are keyed on (item_id, repeat) as well.  An
+agent holding one also puts the item into its request key (key_context), so
+two items whose prompts happen to coincide never share an episode.  Without
+context tools, keys are exactly as before.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from typing import Any
 from .backends.base import Backend, Request, Response, with_retries
 from .backends.cache import Cache
 from .spec import digest
-from .tools import Tool, ToolInputError, ToolUnavailable, tool_index
+from .tools import Tool, ToolContext, ToolInputError, ToolUnavailable, tool_index
 
 __all__ = ["AgentBackend"]
 
@@ -52,6 +58,24 @@ class AgentBackend(Backend):
         self.max_turns, self.max_tool_calls = max_turns, max_tool_calls
         self.tool_cache, self.attempts = tool_cache, attempts
         self.result_chars = result_chars
+        self.uses_context = any(t.uses_context for t in self.tools.values())
+
+    def key_context(self, req: Request) -> dict[str, Any] | None:
+        return {"item_id": req.item_id} if self.uses_context else None
+
+    def refusal(self, req: Request) -> str | None:
+        if self.uses_context and req.item_id is None:
+            return ("AgentBackend has context tools, which need the unit's "
+                    "item: Request.item_id is unset (the runner sets it)")
+        return super().refusal(req)
+
+    def _context(self, req: Request) -> ToolContext | None:
+        if not self.uses_context:
+            return None
+        if req.item_id is None:
+            raise ValueError(f"context tools need Request.item_id; unit "
+                             f"{req.unit_id} has none")
+        return ToolContext(req.unit_id, req.item_id, req.repeat)
 
     def identity(self) -> dict[str, Any]:
         return {"backend": self.name, "inner": self.inner.identity(),
@@ -62,18 +86,25 @@ class AgentBackend(Backend):
     def close(self) -> None:
         self.inner.close()
 
-    def _call_tool(self, tool: Tool, args: Any) -> str:
-        key = digest({"tool": tool.identity(), "args": args})
+    def _call_tool(self, tool: Tool, args: Any, ctx: ToolContext | None) -> str:
+        key_obj: dict[str, Any] = {"tool": tool.identity(), "args": args}
+        if tool.uses_context:
+            if ctx is None:
+                raise RuntimeError(f"context tool {tool.name!r} reached "
+                                   f"without a ToolContext")
+            key_obj["context"] = ctx.key()
+        key = digest(key_obj)
         hit = self.tool_cache.get(key) if self.tool_cache else None
         if hit is not None:
             return hit["content"]
-        content = tool(args)
+        content = tool(args, ctx)
         if self.tool_cache:
             self.tool_cache.put(key, {"content": content})
         return content
 
     def complete(self, req: Request) -> Response:
         specs = [t.spec() for t in self.tools.values()]
+        ctx = self._context(req)
         msgs = [dict(m) for m in req.messages]
         trajectory: list[dict[str, Any]] = []
         n_calls = input_errors = 0
@@ -99,7 +130,8 @@ class AgentBackend(Backend):
         for _ in range(self.max_turns):
             r = with_retries(self.inner.complete,
                              Request(req.unit_id, msgs, req.params,
-                                     tools=specs, repeat=req.repeat),
+                                     tools=specs, repeat=req.repeat,
+                                     item_id=req.item_id),
                              self.attempts)
             if not r.ok:
                 return done(error=f"model: {r.error}", truncated=False)
@@ -130,7 +162,8 @@ class AgentBackend(Backend):
                         raise ToolInputError(
                             f"unknown tool {c.get('name')!r}; available: "
                             f"{sorted(self.tools)}")
-                    content, kind = self._call_tool(tool, c.get("arguments")), "ok"
+                    content = self._call_tool(tool, c.get("arguments"), ctx)
+                    kind = "ok"
                 except ToolInputError as exc:
                     input_errors += 1
                     content, kind = f"error: {exc}", "input_error"

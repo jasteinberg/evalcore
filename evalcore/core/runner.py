@@ -119,15 +119,18 @@ class Plan:
 
 
 def rendered(render: Render, u: Unit) -> Request:
-    """`render(u)` carrying the unit's repeat index.  The runner owns the
-    repeat: a render that sets a different one is refused."""
+    """`render(u)` carrying the unit's repeat index and item id.  The runner
+    owns both: a render that sets different ones is refused."""
     req = render(u)
-    if req.repeat == u.repeat:
-        return req
-    if req.repeat != 0:
+    if req.repeat not in (0, u.repeat):
         raise ValueError(f"render set repeat={req.repeat} on unit {u.id} "
                          f"with repeat {u.repeat}")
-    return replace(req, repeat=u.repeat)
+    if req.item_id not in (None, u.item.item_id):
+        raise ValueError(f"render set item_id={req.item_id!r} on unit {u.id} "
+                         f"of item {u.item.item_id!r}")
+    if req.repeat == u.repeat and req.item_id == u.item.item_id:
+        return req
+    return replace(req, repeat=u.repeat, item_id=u.item.item_id)
 
 
 def plan(units: Iterable[Unit], backend: Backend, render: Render,
