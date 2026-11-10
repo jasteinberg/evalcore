@@ -1,6 +1,6 @@
-"""Gold controls: the oracle and gold-removed arms against rankings written
+"""Gold controls: the oracle and gold-removed conditions against rankings written
 out by hand from their definitions (search.py, "Controls."), the refusals,
-and both arms run and scored through the ordinary runner."""
+and both conditions run and scored through the ordinary runner."""
 
 from __future__ import annotations
 
@@ -148,13 +148,13 @@ def test_gold_by_query_reads_the_last_user_message():
 def test_controls_through_the_runner(tmp_path, mode, recall):
     """Every search_qa question has at most 2 gold documents, so at k = 3 the
     oracle holds all of them (recall@3 = 1) and removed none (= 0).  All
-    three arms read exactly 3 documents; none's recall depends on BM25."""
+    three conditions read exactly 3 documents; none's recall depends on BM25."""
     world = make_world(6, 0)
     items = search_qa_items(world, 0)
     assert max(len(it.payload["gold_docs"]) for it in items) <= 2
     task = Task("sqa", items, score=score_ranked(ks=(3,)))
     r = GoldControl(BM25(world.docs), gold_by_query(items), mode)
-    df = task.run(grid({"arm": [mode]}), RetrieverBackend(r, k=3),
+    df = task.run(grid({"condition": [mode]}), RetrieverBackend(r, k=3),
                   tmp_path / "r.jsonl", workers=1, batch_size=8,
                   stream=io.StringIO())
     assert (df["status"] == "ok").all() and len(df) == len(items)

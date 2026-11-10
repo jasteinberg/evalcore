@@ -65,7 +65,7 @@ def one_row(tmp_path, be, label="a", tools=None,
             score=lambda u, r: {}) -> pd.Series:
     """`be` run through the runner on one item (a request carrying `tools`
     specs if given); the row."""
-    df = execute(units(grid({"arm": [label]}), [Item("q0", {})]), be,
+    df = execute(units(grid({"condition": [label]}), [Item("q0", {})]), be,
                  lambda u: Request(u.id, [{"role": "user", "content": "q"}],
                                    {}, tools=tools),
                  score, tmp_path / f"{label}.jsonl", workers=1,
@@ -146,7 +146,7 @@ def test_infrastructure_and_bugs_are_told_apart(tmp_path):
     assert outs["bug"]["status"] == "error" and "KeyError" in outs["bug"]["error"]
     assert outs["model"]["status"] == "error"
     assert outs["model"]["error"].startswith("model:")
-    a = attrition(outs["outage"].to_frame().T, ["arm"]).iloc[0]
+    a = attrition(outs["outage"].to_frame().T, ["condition"]).iloc[0]
     assert (a["n_tool_error"], a["n_err"]) == (1, 0)
 
 

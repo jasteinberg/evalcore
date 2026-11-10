@@ -57,8 +57,8 @@ def digest(obj: Any, n: int = 16) -> str:
 class Cell:
     """One configuration.  `params` carries everything that can change the
     model's behaviour; `tags` carries labels that must NOT affect identity
-    (a human-readable arm name, a note).  Keeping tags out of the digest is
-    what lets you rename an arm without invalidating the cache."""
+    (a human-readable condition name, a note).  Keeping tags out of the digest is
+    what lets you rename a condition without invalidating the cache."""
 
     params: Mapping[str, Any]
     tags: Mapping[str, Any] = field(default_factory=dict)
@@ -114,7 +114,7 @@ def grid(axes: Mapping[str, Sequence[Any]],
 @dataclass(frozen=True)
 class Item:
     """One dataset element.  `item_id` is the CLUSTER label used by every
-    bootstrap downstream, so it must be stable across arms and must be
+    bootstrap downstream, so it must be stable across conditions and must be
     shared by all augmentations derived from the same source element --
     that sharing is the whole reason the design effect is computable."""
 

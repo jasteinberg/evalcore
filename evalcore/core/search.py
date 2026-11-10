@@ -14,7 +14,7 @@ and one control, for evaluating a reader that consumes retrieval:
 
     GoldControl      the base ranking with each query's gold documents
                      forced in ("oracle"), taken out ("removed"), or left
-                     alone ("none", the matched base arm), at the same k
+                     alone ("none", the matched base condition), at the same k
 
 A `ScoredRetriever` also gives `score_all`: every document's score, not
 only the top k.  BM25 and a DenseRetriever over an ExactIndex do; an
@@ -105,7 +105,7 @@ removed measures how much of the score depends on the gold text at all,
 and accuracy under removed is what the reader answers without it
 (parametric memory, or contamination).
 
-"none" is the base arm to compare the controls against, rather than the
+"none" is the base condition to compare the controls against, rather than the
 base retriever itself.  pi is the FULL ranking, from `score_all`, so a
 filler can be a document BM25.retrieve would drop (sharing no term with
 the query).  For a query that shares terms with fewer than k documents,
@@ -662,15 +662,15 @@ _CONTROL_MODES = ("none", "oracle", "removed")
 
 
 class GoldControl:
-    """A control arm for a reader that consumes retrieval: the base
+    """A control condition for a reader that consumes retrieval: the base
     ranking with the query's gold documents forced in ("oracle"), taken
-    out ("removed"), or left alone ("none", the arm to compare those two
+    out ("removed"), or left alone ("none", the condition to compare those two
     against), at the same k (definitions in the module docstring).
 
     `gold` maps each query, as the retriever receives it, to its gold doc
     ids; `gold_by_query` builds it from items.  A query not in it is
     refused, never answered from the base alone, in every mode, so the
-    three arms run on the same queries."""
+    three conditions run on the same queries."""
 
     def __init__(self, base: ScoredRetriever, gold: Mapping[str, Sequence[str]],
                  mode: str) -> None:

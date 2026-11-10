@@ -26,7 +26,7 @@ RTOL = 1e-12
 
 def _model(req):
     """Deterministic answers that depend on the model param and the item, so
-    the two arms differ on some items and agree on others."""
+    the two conditions differ on some items and agree on others."""
     q = req.messages[-1]["content"]
     i = int(q.split()[-1])
     strong = req.params["model"] == "strong"
@@ -68,11 +68,11 @@ def test_paired_bootstrap(golden):
     for c in range(k):
         level = rng.normal()
         for _ in range(m):
-            for arm, shift in (("a", 0.3), ("b", 0.0)):
-                rows.append({"cluster": f"c{c}", "arm": arm,
+            for condition, shift in (("a", 0.3), ("b", 0.0)):
+                rows.append({"cluster": f"c{c}", "condition": condition,
                              "v": level + shift + 0.5 * rng.normal()})
     df = pd.DataFrame(rows)
-    res = paired_bootstrap(df, "v", "arm", "a", "b", n_boot=2000, seed=1)
+    res = paired_bootstrap(df, "v", "condition", "a", "b", n_boot=2000, seed=1)
     golden("paired", res.as_row(), rtol=RTOL)
 
 

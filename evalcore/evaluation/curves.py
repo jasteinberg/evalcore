@@ -147,7 +147,7 @@ def _align(d: pd.DataFrame, x: str, item: str, cluster: str,
     if dup.any():
         raise ValueError(
             f"{int(dup.sum())} (item, {x}) pairs have more than one row: two "
-            f"arms, two tasks or several repeats share item ids.  Filter the "
+            f"conditions, two tasks or several repeats share item ids.  Filter the "
             f"frame to one row per item per axis point first.")
     xs = np.sort(d[x].unique())
     if len(xs) < 2:

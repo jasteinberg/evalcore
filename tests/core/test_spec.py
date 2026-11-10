@@ -21,9 +21,9 @@ from evalcore.core.backends import DECODE_KEYS
 
 
 def test_ids_ignore_key_order_and_tags():
-    """Tags bear no identity: renaming an arm must not rerun it."""
-    a = Cell({"model": "m", "temperature": 0.0}, {"arm": "baseline"})
-    b = Cell({"temperature": 0.0, "model": "m"}, {"arm": "renamed"})
+    """Tags bear no identity: renaming a condition must not rerun it."""
+    a = Cell({"model": "m", "temperature": 0.0}, {"condition": "baseline"})
+    b = Cell({"temperature": 0.0, "model": "m"}, {"condition": "renamed"})
     assert a.id == b.id
     i = Item("q0", {"q": "?"})
     assert Unit(a, i, 0).id == Unit(b, i, 0).id
@@ -76,10 +76,10 @@ def test_tags_never_shadow_params():
     param is "m" and the tag "x".  Tags bear no identity, so the frame's
     `model` column must be the param, and the cell id must equal that of the
     same params with no tags."""
-    c = Cell(params={"model": "m"}, tags={"model": "x", "arm": "A"})
+    c = Cell(params={"model": "m"}, tags={"model": "x", "condition": "A"})
     got = c.merged()
     assert got["model"] == "m"
-    assert got["arm"] == "A"
+    assert got["condition"] == "A"
     assert got["cell_id"] == Cell(params={"model": "m"}).id
 
 

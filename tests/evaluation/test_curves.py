@@ -270,7 +270,7 @@ def test_nonpositive_x_needs_a_linear_axis():
 
 def test_duplicate_item_rows_at_one_x_are_refused():
     f = pd.concat([frame({1.0: HAND, 2.0: HAND}),
-                   frame({1.0: HAND, 2.0: HAND})])     # e.g. two arms
+                   frame({1.0: HAND, 2.0: HAND})])     # e.g. two conditions
     with pytest.raises(ValueError, match="more than one row"):
         axis_data(f, "x")
 

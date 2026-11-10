@@ -35,7 +35,7 @@ from evalcore import (
 def sweep(tmp_path, models=("m1", "m2", "m3"), n_items=8, alive=10,
           fail_on=frozenset(), on_call=None, **kw):
     """Run a cell-major sweep that dies after `alive` calls."""
-    cells = grid({"model": list(models)}, tags={"arm": "base"})
+    cells = grid({"model": list(models)}, tags={"condition": "base"})
     out = tmp_path / "runs.jsonl"
     be = Dies(alive, fail_on, on_call)
     with pytest.raises(KeyboardInterrupt):
@@ -78,7 +78,7 @@ def test_a_sweep_that_died_before_its_first_call_is_still_accountable(
 
 
 def test_manifest_joins_to_the_frame_on_unit_id(tmp_path):
-    cells = grid({"model": ["m1", "m2"]}, tags={"arm": "base"})
+    cells = grid({"model": ["m1", "m2"]}, tags={"condition": "base"})
     out = tmp_path / "runs.jsonl"
     df = run(list(units(cells, items(6))), EchoBackend(), out)
     plan = read_manifest(manifest_path(out))
@@ -193,9 +193,9 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
         tmp_path):
     """The plan is per sink, not per invocation.
 
-    Sweep one plans both arms and dies inside the first.  Sweep two is
-    narrowed to the arm someone was debugging, finishes clean, and would
-    otherwise report a perfect table -- the second arm having quietly left
+    Sweep one plans both conditions and dies inside the first.  Sweep two is
+    narrowed to the condition someone was debugging, finishes clean, and would
+    otherwise report a perfect table -- the second condition having quietly left
     the plan.  The union keeps it, and `run` says so on the way out.
     """
     cells = grid({"model": ["m1", "m2"]})
@@ -203,10 +203,10 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
     with pytest.raises(KeyboardInterrupt):
         run(list(units(cells, its)), Dies(alive=4), out)
 
-    narrow = list(units(cells[:1], its))             # only the debugged arm
+    narrow = list(units(cells[:1], its))             # only the debugged condition
     log = io.StringIO()
     df = run(narrow, EchoBackend(), out, stream=log)
-    assert len(df) == 6                              # arm one, complete
+    assert len(df) == 6                              # condition one, complete
     assert "6 planned units were never attempted" in log.getvalue()
 
     full = attrition(to_frame(out), ["model"], manifest=manifest_path(out))
@@ -215,7 +215,7 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
     assert got.loc["m1", "n_completed"] == 6
     assert got.loc["m1", "n_missing"] == 0
     assert got.loc["m2", "n_completed"] == 0
-    assert got.loc["m2", "n_missing"] == 6      # the arm nobody re-ran
+    assert got.loc["m2", "n_missing"] == 6      # the condition nobody re-ran
 
 
 def test_resume_reads_the_jsonl_not_the_manifest(tmp_path):
@@ -330,7 +330,7 @@ def test_a_unit_is_counted_once_however_many_rows_it_has(tmp_path):
     plan = write_manifest(units(cells, its), tmp_path / "m.jsonl")
 
     rows = []
-    for k, u in enumerate(list(units(cells, its))[:3]):     # arm m1 only
+    for k, u in enumerate(list(units(cells, its))[:3]):     # condition m1 only
         r = u.row()
         r["error"] = "judge: refused" if k < 2 else None
         rows += [dict(r, judge="a"), dict(r, judge="b")]

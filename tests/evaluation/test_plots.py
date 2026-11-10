@@ -28,19 +28,19 @@ def test_c36_plots_draw_the_interval_and_the_cluster_means():
     cluster c1 has A 1 and B 0, 1, so (1/2, 1).  Values read back from the
     Axes (Agg backend, no pyplot figure).  Tolerance 1e-12: float
     arithmetic on the half-widths 0.3 and 0.4."""
-    summ = pd.DataFrame({"arm": ["m"], "point": [0.5], "lo": [0.2], "hi": [0.9]})
+    summ = pd.DataFrame({"condition": ["m"], "point": [0.5], "lo": [0.2], "hi": [0.9]})
     ax = Figure().add_subplot()
-    ci_plot(summ, "arm", ax=ax)
+    ci_plot(summ, "condition", ax=ax)
     assert_same(_bar_segments(ax), [((0.0, 0.2), (0.0, 0.9))], atol=1e-12)
 
     ax = Figure().add_subplot()
-    forest(summ.rename(columns={"arm": "contrast"}), ax=ax)
+    forest(summ.rename(columns={"condition": "contrast"}), ax=ax)
     assert_same(_bar_segments(ax), [((0.2, 0.0), (0.9, 0.0))], atol=1e-12)
 
     df = pd.DataFrame({"cluster": ["c0"] * 5 + ["c1"] * 3,
-                       "arm": ["a", "a", "b", "b", "b", "a", "b", "b"],
+                       "condition": ["a", "a", "b", "b", "b", "a", "b", "b"],
                        "y": [0.0, 1, 1, 1, 0, 1, 0, 1]})
     ax = Figure().add_subplot()
-    paired_scatter(df, "y", "arm", "a", "b", ax=ax)
+    paired_scatter(df, "y", "condition", "a", "b", ax=ax)
     pts = sorted(map(tuple, ax.collections[0].get_offsets().tolist()))
     assert_same(pts, [(0.5, 1.0), (2 / 3, 0.5)], atol=1e-12)

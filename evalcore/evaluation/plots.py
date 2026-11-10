@@ -64,12 +64,12 @@ def forest(diffs: pd.DataFrame, label: str = "contrast",
     return ax
 
 
-def paired_scatter(df: pd.DataFrame, value: str, arm: str, a: str, b: str,
+def paired_scatter(df: pd.DataFrame, value: str, condition: str, a: str, b: str,
                    cluster: str = "cluster", ax: Axes | None = None) -> Axes:
     ax = ax or plt.subplots(figsize=(4.6, 4.6))[1]
-    piv = (df[df[arm].isin([a, b])]
-           .groupby([cluster, arm], observed=True)[value].mean()
-           .unstack(arm)[[a, b]].dropna())
+    piv = (df[df[condition].isin([a, b])]
+           .groupby([cluster, condition], observed=True)[value].mean()
+           .unstack(condition)[[a, b]].dropna())
     ax.scatter(piv[b], piv[a], s=18, alpha=0.6, edgecolor="none")
     lim = [min(piv.min()), max(piv.max())]
     ax.plot(lim, lim, color="0.6", lw=1, ls="--")

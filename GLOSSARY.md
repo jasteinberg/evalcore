@@ -29,8 +29,8 @@ run merge with a later one.
 
 **Axis** — one named dimension of the grid (`model`, `temperature`, `template`).
 
-**Arm** — a set of cells being contrasted. An arm is a comparison you intend
-to make, not a structure the package enforces.
+**Condition** — a set of cells being contrasted. A condition is a
+comparison you intend to make, not a structure the package enforces.
 
 ## Execution
 
@@ -91,8 +91,9 @@ by a factor that is easy to forget and hard to notice.
 
 **BCa** — bias-corrected and accelerated bootstrap interval.
 
-**Paired bootstrap** — resamples clusters once and differences two arms within
-each resample, so the correlation between arms is retained.
+**Paired bootstrap** — resamples clusters once and differences two
+conditions within each resample, so the correlation between conditions is
+retained.
 
 ---
 
@@ -121,8 +122,8 @@ things, at three levels: `Experiment.run()` runs the pipeline stages,
 underneath both.
 
 **rho.** The intraclass correlation in `icc1` and `effective_n`. Not a
-correlation between arms, and not a rank correlation. If a document needs both,
-name the second one explicitly.
+correlation between conditions, and not a rank correlation. If a document
+needs both, name the second one explicitly.
 
 **Score / metric.** A score is per-row, a metric is per-cell. `summarize`
 consumes scores and emits metrics; a "score" appearing in a results table with

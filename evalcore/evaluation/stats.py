@@ -67,7 +67,7 @@ class BootResult:
     alpha: float = 0.05
     method: str = "bca"
     replicates: np.ndarray | None = field(default=None, repr=False)
-    # paired_bootstrap only: clusters one arm saw and the other did not
+    # paired_bootstrap only: clusters one condition saw and the other did not
     n_unpaired: int | None = None
 
     def as_row(self) -> dict:
@@ -196,40 +196,40 @@ def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
     return _result(theta, reps, jack, k, len(vals), alpha, method)
 
 
-def paired_bootstrap(df: pd.DataFrame, value: str, arm: str, a: str, b: str,
+def paired_bootstrap(df: pd.DataFrame, value: str, condition: str, a: str, b: str,
                      cluster: str = "cluster", n_boot: int = 10_000,
                      seed: int = 0, alpha: float = 0.05,
                      method: str = "bca") -> BootResult:
-    r"""CI for the paired difference E[A] - E[B] on the clusters both arms
+    r"""CI for the paired difference E[A] - E[B] on the clusters both conditions
     saw.  Reduce each cluster to D_i = Abar_i - Bbar_i, then bootstrap D.
 
         Var(Dbar) = (s2_A + s2_B - 2 r s_A s_B) / k                     (4)
 
-    with r the across-item correlation of the two arms' scores.  Item
-    difficulty is common to both arms, so r is typically 0.6-0.9 on eval
+    with r the across-item correlation of the two conditions' scores.  Item
+    difficulty is common to both conditions, so r is typically 0.6-0.9 on eval
     data and (4) is several times smaller than the unpaired variance.
     Geometrically: differencing projects out the shared item-difficulty
     direction in R^k, and the CI shrinks by the length of what was removed.
 
     This is also why "the two CIs overlap" is NOT a test.  For independent
-    arms with equal SE, 95% intervals stop overlapping only around
-    p ~ 0.006; for paired arms the overlap criterion ignores r entirely and
+    conditions with equal SE, 95% intervals stop overlapping only around
+    p ~ 0.006; for paired conditions the overlap criterion ignores r entirely and
     can be arbitrarily conservative.  Always report the difference's own CI.
 
-    A cluster only one arm saw has no D_i, so it cannot enter (4).  Its rows
+    A cluster only one condition saw has no D_i, so it cannot enter (4).  Its rows
     are left out of `n_rows` (which counts the rows behind the k
     differences), its count is `n_unpaired`, and a RuntimeWarning names it:
-    if one arm fails on the hard items, the paired difference is taken on
+    if one condition fails on the hard items, the paired difference is taken on
     the easy ones, and a reader has to know how many were lost.
     """
     _check_method(method)
-    sub = df[df[arm].isin([a, b])]
+    sub = df[df[condition].isin([a, b])]
     _require_clusters(sub, value, cluster)
-    d = sub[[value, arm, cluster]].dropna()
-    piv = (d.groupby([cluster, arm], observed=True)[value]
-             .mean().unstack(arm))
+    d = sub[[value, condition, cluster]].dropna()
+    piv = (d.groupby([cluster, condition], observed=True)[value]
+             .mean().unstack(condition))
     if a not in piv or b not in piv:
-        raise ValueError(f"arms {a!r}/{b!r} not both present")
+        raise ValueError(f"conditions {a!r}/{b!r} not both present")
     seen = piv[[a, b]].notna()
     n_unpaired = int((seen[a] != seen[b]).sum())
     piv = piv[[a, b]].dropna()
@@ -239,7 +239,7 @@ def paired_bootstrap(df: pd.DataFrame, value: str, arm: str, a: str, b: str,
             f"left out of the paired difference ({len(piv)} paired)",
             RuntimeWarning, stacklevel=2)
     if len(piv) < 2:
-        raise ValueError("need >=2 clusters seen by both arms")
+        raise ValueError("need >=2 clusters seen by both conditions")
     diff = (piv[a] - piv[b]).to_numpy(dtype=float)
     theta, reps, jack = _mean_boot(diff, n_boot, seed)
     return _result(theta, reps, jack, diff.size,

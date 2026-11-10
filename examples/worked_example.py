@@ -1,6 +1,6 @@
 """Worked example: what actually flows through the harness.
 
-A two-arm multiple-choice eval with paraphrase augmentation, run against a
+A two-condition multiple-choice eval with paraphrase augmentation, run against a
 scripted stand-in model so the numbers are reproducible and cost nothing.
 Prints one concrete object at each stage of the pipeline.
 
@@ -41,7 +41,7 @@ ABILITY = {"model-a": 0.85, "model-b": 0.35}
 
 
 def build_items():
-    """40 source questions, each with 2 paraphrases -> 120 rows per arm.
+    """40 source questions, each with 2 paraphrases -> 120 rows per condition.
     The paraphrase carries parent_id, so all 3 share a cluster."""
     items = []
     for i in range(N_SOURCE):
@@ -82,7 +82,7 @@ def render(u: Unit) -> Request:
 
 class ScriptedModel:
     """Stand-in for an API. P(correct) = sigma(a(ability - difficulty)),
-    plus a small CoT bonus, so arm A really is better and the paraphrases
+    plus a small CoT bonus, so condition A really is better and the paraphrases
     of one source item really are correlated."""
 
     def __call__(self, req: Request) -> str:
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     print(f"\nframe shape = {df.shape}")
     print("\none row, transposed:")
     print(df.loc[df.item_id == "q000"].iloc[0][cols].to_string())
-    print("\nsame source item, 3 rows (original + 2 paraphrases), one arm:")
+    print("\nsame source item, 3 rows (original + 2 paraphrases), one condition:")
     sel = df[(df.cluster == "q000") & (df.model == "model-a")
              & (df.template == "cot")]
     print(sel[["item_id", "cluster", "pred", "correct", "resp_chars"]]

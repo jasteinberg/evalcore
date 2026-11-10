@@ -172,7 +172,7 @@ class HFBackend(Backend):
             if unread:
                 return (f"HFBackend without a probe reads no param {unread}: "
                         f"it uses only {sorted(DECODE_KEYS)}.  A label (the "
-                        f"model's name, an arm) belongs in the cell's tags")
+                        f"model's name, a condition) belongs in the cell's tags")
         return super().refusal(req)
 
     def _prepare_tokenizer(self) -> None:

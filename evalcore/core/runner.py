@@ -6,7 +6,7 @@ Design commitments, each of which is a lesson rather than a preference:
 
 * Append-only JSONL, flushed per result.  A sweep that dies eight hours
   in must lose nothing.  Parquet at the end, JSONL during.
-* Resume by unit_id, not by position.  Reordering the grid, adding an arm,
+* Resume by unit_id, not by position.  Reordering the grid, adding a condition,
   or widening the item set must not invalidate finished work.  But a
   finished row counts only if it was made from the request the unit renders
   to NOW: every row records its `request_key` (backends.request_key), and a
@@ -446,7 +446,7 @@ def _finish(ctx: _Context, mpath: Path | None) -> None:
           f"errors{cache_msg}", file=ctx.stream, flush=True)
     if mpath is not None:
         # Against the manifest, not this invocation's units: a narrowed
-        # resume (a `limit=`, one arm re-run) is exactly the case where the
+        # resume (a `limit=`, one condition re-run) is exactly the case where the
         # shortfall is invisible from the call site.
         never = len({r["unit_id"] for r in _read_records(mpath)}
                     - ctx.sink.seen.keys())

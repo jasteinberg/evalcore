@@ -460,7 +460,7 @@ def test_a_backend_must_say_what_determines_its_outputs(tmp_path):
 
 def test_run_cache_resume_and_frame(tmp_path):
     cells = grid({"model": ["m1", "m2"], "temperature": [0.0]},
-                 tags={"arm": "base"})
+                 tags={"condition": "base"})
     its = items(8, aug=2)
     out, cache = tmp_path / "runs.jsonl", Cache(tmp_path / "cache")
 

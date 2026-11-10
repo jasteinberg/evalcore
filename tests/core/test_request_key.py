@@ -184,7 +184,7 @@ def test_backend_defaults_are_part_of_the_cache_key(tmp_path):
         return Request(u.id, [{"role": "user", "content": "q"}],
                        {"temperature": 0.0})
 
-    us, cache = list(units(grid({"arm": ["x"]}), items(2))), Cache(tmp_path)
+    us, cache = list(units(grid({"condition": ["x"]}), items(2))), Cache(tmp_path)
     execute(us, ModelFromDefaults("model-a"), render_no_model, echo_score,
         tmp_path / "a.jsonl", cache=cache, workers=1, stream=io.StringIO())
     b = execute(us, ModelFromDefaults("model-b"), render_no_model, echo_score,

@@ -68,7 +68,7 @@ statuses and statistics, is the same for all of them.
 
 | experiment | the request carries | backend | the row gets (`meta_*`) | analyse with |
 |---|---|---|---|---|
-| graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts, `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two arms |
+| graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts, `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two conditions |
 | teacher-forced scoring | `target`: the continuation to score | `HFBackend` | per target token `logp`, `argmax_ok`; `sum_logp`, `em_tf` | `tasks.graders.score_teacher_forced`; `axis_curves` along a model axis |
 | candidate scoring | `candidates`: token ids, prompt as text or `input_ids` | `HFBackend` | `cand_logp` over the full vocabulary, `cand_mass`, `leakage`, `top1_id` | your own `score`; `value_curves` along a swept setting |
 | activation capture | any of the above | `HFBackend(probe=...)` | what the probe's `collect` returns; arrays go to an `.npz` sidecar named in `meta_arrays` | `load_arrays` |
@@ -368,6 +368,35 @@ an approximate FAISS index has its recall measured against the exact
 search, so an approximation shows up as a number. The same retrievers serve
 as the agent's search tool (`CorpusSearch`).
 
+`SampledRetriever(base, beta, seed)` makes a deterministic ranking random.
+It draws k documents without replacement with probability proportional to
+exp(beta × score), a Plackett-Luce draw done by the Gumbel top-k trick.
+beta = 0 gives a uniformly random subset, and beta = inf gives the base
+ranking itself. Each draw is fixed by the query and the unit's repeat
+index, so repeats are independent draws while a rerun reproduces every
+row. `draw()` also returns the noise behind each draw, for logging.
+
+To evaluate a model that reads retrieved documents, `GoldControl` gives
+three conditions over the same base ranking. "none" is its top k,
+"oracle" puts the item's gold documents first and fills to k, and
+"removed" takes the gold documents out and refills to k. All three read k documents, so the
+differences between them come from the gold documents alone. Oracle minus
+none is what better retrieval could still gain, and accuracy under
+removed is what the model answers without the gold text.
+
+```python
+from evalcore.core.search import GoldControl, gold_by_query
+
+gold = gold_by_query(task.items)       # query -> gold ids, from the items
+conditions = {m: GoldControl(BM25(world.docs), gold, m)
+              for m in ("none", "oracle", "removed")}
+```
+
+Both need a base that scores every document: BM25, or dense retrieval over
+the exact index. The controls look the gold documents up by the query
+text, so they apply when the query is the item's own question, not to the
+searches an agent writes itself.
+
 FAISS (`pip install -e ".[retrieval]"`) and torch cannot share a process
 when both come from pip wheels on macOS: each bundles its own OpenMP
 runtime, and the process aborts. `FaissIndex` detects this and raises with
@@ -392,7 +421,7 @@ For `out="runs/x.jsonl"`:
 
 | path | contents |
 |---|---|
-| `examples/worked_example.py` | a two-arm eval against a scripted model, printing what flows through each stage |
+| `examples/worked_example.py` | a two-condition eval against a scripted model, printing what flows through each stage |
 | `examples/probe_example.py` | steering inside a tiny random-init Qwen2, swept over a scale: candidate scoring, activation capture to sidecars, `value_curves` |
 | `examples/agent_example.py` | a scripted tool-calling model under `AgentBackend`, reaching every episode outcome, with `attrition` |
 | `scripts/preflight.py` | checks an API endpoint before a sweep: auth, request shape, truncation, latency, rate-limit headers |

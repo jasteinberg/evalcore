@@ -24,30 +24,30 @@ pytestmark = pytest.mark.filterwarnings(
 
 
 def curve_experiment(tmp_path, **kw):
-    """v(x, arm) = log10(x) / 2 + offset(arm), the same for every item."""
+    """v(x, condition) = log10(x) / 2 + offset(condition), the same for every item."""
     offset = {"a": 0.0, "b": 0.25}
 
     def model(req):
         p = req.params
-        return f"{math.log10(p['x']) / 2 + offset[p['arm']]}"
+        return f"{math.log10(p['x']) / 2 + offset[p['condition']]}"
 
     items = [Item(f"i{k}", {"messages": [{"role": "user", "content": "v?"}]})
              for k in range(4)]
     task = Task("curve", items,
                 score=lambda u, r: {"v": float(r.text)})
     return Experiment(task, FunctionBackend(model, identity={"m": "log"}),
-                      grid({"x": [1, 10, 100], "arm": ["a", "b"]}),
+                      grid({"x": [1, 10, 100], "condition": ["a", "b"]}),
                       tmp_path / "r.jsonl", calibrate=None, dry_run=None, **kw)
 
 
 def test_curves_are_fitted_per_combination_of_the_other_axes(tmp_path):
-    """Crossing of 0.5, linear in log x: arm a at log10 x = 1 (x = 10);
-    arm b (values 0.25, 0.75, 1.25) at log10 x = 1/2 (x = sqrt 10)."""
+    """Crossing of 0.5, linear in log x: condition a at log10 x = 1 (x = 10);
+    condition b (values 0.25, 0.75, 1.25) at log10 x = 1/2 (x = sqrt 10)."""
     res = curve_experiment(tmp_path, analyses={
         "curve": value_curve("x", "v", levels=[0.5], n_boot=50)}).run()
     table, peak = res.analysis["curve.table"], res.analysis["curve.peak"]
-    assert len(table) == 6 and set(table["arm"]) == {"a", "b"}
-    cross = peak[peak["quantity"] == "crossing_0.5"].set_index("arm")["point"]
+    assert len(table) == 6 and set(table["condition"]) == {"a", "b"}
+    cross = peak[peak["quantity"] == "crossing_0.5"].set_index("condition")["point"]
     assert cross["a"] == pytest.approx(10.0)
     assert cross["b"] == pytest.approx(math.sqrt(10))
     assert (tmp_path / "r.jsonl.analysis" / "curve.peak.csv").exists()
@@ -55,12 +55,12 @@ def test_curves_are_fitted_per_combination_of_the_other_axes(tmp_path):
 
 def test_any_function_of_the_frame_is_an_analysis(tmp_path):
     def per_arm_max(frame, ctx):
-        assert ctx.by == ["arm", "x"]
+        assert ctx.by == ["condition", "x"]
         ok = frame[frame["status"] == "ok"]
-        return ok.groupby("arm", as_index=False)["v"].max()
+        return ok.groupby("condition", as_index=False)["v"].max()
 
     res = curve_experiment(tmp_path, analyses={"max": per_arm_max}).run()
-    assert res.analysis["max"].set_index("arm")["v"].to_dict() == {
+    assert res.analysis["max"].set_index("condition")["v"].to_dict() == {
         "a": 1.0, "b": 1.25}
     assert "attrition" not in res.analysis       # analyses replace the default
 
