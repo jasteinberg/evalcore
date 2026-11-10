@@ -476,9 +476,17 @@ For `out="runs/x.jsonl"`:
 | `runs/x.jsonl.arrays/` | `.npz` sidecars from probes (or under the cache dir, if there is one) |
 | `runs/x.jsonl.calibration.json` | the calibration, reused while fresh |
 | `runs/x.jsonl.analysis/*.csv` | attrition and summary tables |
-| `runs/x.jsonl.run.json` | the report |
+| `runs/x.jsonl.run.json` | the report, with the provenance: the commit, a digest of the package source, installed package versions, the command line |
+| `runs/x.jsonl.config.json` | the resolved config: every default written out, nested specs included. It is a config, and rebuilds the same job |
+| `runs/x.jsonl.script.py` | for an experiment built in a script, a copy of the script |
+| `runs/x.jsonl.repo.patch` | when the checkout had uncommitted changes, the package's diff against the commit, new files included |
 | `runs/x.jsonl.done` | the job hash and its status (running or complete). On resume a complete job skips its model calls and only re-analyses |
 | `runs/x.jsonl.shards.json` | written by `merge`: which shards the sink was combined from |
+
+To get the code of a run back: `git checkout <commit>`, then from the repo
+root `git apply --directory=<package_dir> runs/x.jsonl.repo.patch` (both are
+in `run.json`). The result hashes to the recorded `source_digest`, which also
+identifies the code of a vendored copy with no git.
 
 ## Outside the package
 

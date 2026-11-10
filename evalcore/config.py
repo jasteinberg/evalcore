@@ -68,7 +68,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -97,7 +97,7 @@ from .core.spec import grid
 from .core.tools import Tool
 from .evaluation.retrieval import score_ranked
 from .pipeline import Experiment, RunOptions, Stage
-from .registry import ConfigError, build, register
+from .registry import ConfigError, build, recording, register, resolve
 from .tasks.arithmetic import arithmetic_task
 from .tasks.base import Task
 from .tasks.graders import make_score, score_teacher_forced
@@ -404,11 +404,37 @@ def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
 
 
 def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
-    """An Experiment from a config file or dict (see the module docstring)."""
+    """An Experiment from a config file or dict (see the module docstring).
+
+    The experiment carries the RESOLVED config in `.config`: the config as
+    given, with every component spec (nested ones too) showing every
+    argument its factory took, defaults included, and repeats, tags and
+    the full options written out.  The run writes it beside the sink, so
+    a run records what it ran even after a default changes in the code,
+    and the file is itself a config that rebuilds the same job."""
     if isinstance(source, (str, Path)):
         base, cfg = Path(source).parent, json.loads(Path(source).read_text())
     else:
-        base, cfg = None, dict(source)
+        # a JSON round trip: the config must be JSON anyway, and fresh
+        # string objects keep `resolve`'s identity matching unambiguous
+        try:
+            base, cfg = None, json.loads(json.dumps(dict(source)))
+        except TypeError as exc:
+            raise ConfigError(f"config: not JSON ({exc})") from exc
+    with recording() as rec:
+        exp = _build(cfg, base)
+    resolved = resolve(cfg, rec)
+    resolved["repeats"] = exp.repeats
+    resolved["tags"] = dict(cfg.get("tags", {}))
+    resolved["options"] = asdict(exp.options)
+    if isinstance(exp.backend, AgentBackend):     # built here, not by a factory
+        resolved["agent"] = {"max_turns": exp.backend.max_turns,
+                             "max_tool_calls": exp.backend.max_tool_calls}
+    exp.config = resolved
+    return exp
+
+
+def _build(cfg: dict[str, Any], base: Path | None) -> Experiment:
     _check(cfg, _TOP, "config", required=("out", "task", "backend", "grid"))
     _plugins(cfg.get("plugins", []), base)
 

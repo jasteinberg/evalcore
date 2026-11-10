@@ -33,12 +33,52 @@ imports it first.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, TypeVar
 
 __all__ = ["KINDS", "REGISTRIES", "ConfigError", "Registry", "build", "register"]
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+# While `recording()` is open: id(spec as given) -> (that spec, the spec
+# with every default the factory filled in).  Holding the given spec keeps
+# it alive, so its id cannot be reused by a later object while the record
+# exists.  `resolve` swaps the resolved specs into the config.
+Record = dict[int, tuple[Any, dict[str, Any]]]
+_RECORD: ContextVar[Record | None] = ContextVar("_RECORD", default=None)
+
+
+@contextmanager
+def recording() -> Iterator[Record]:
+    """Record every spec `build` resolves, nested ones included (a
+    reranker's first-stage retriever is built inside the reranker's
+    factory, from the dict the config gave it)."""
+    rec: Record = {}
+    token = _RECORD.set(rec)
+    try:
+        yield rec
+    finally:
+        _RECORD.reset(token)
+
+
+def resolve(node: Any, rec: Record) -> Any:
+    """`node` (a config, or part of one) with each spec `build` was given
+    replaced by its resolved form, recursively.  Specs are matched by
+    object identity, so the same text in a non-spec position is left
+    alone.  A resolved spec's "type" is the name it was given, which for
+    a spec given as a bare string is that same string object, so it is
+    not resolved again."""
+    hit = rec.get(id(node))
+    if hit is not None and hit[0] is node:
+        return {k: v if k == "type" else resolve(v, rec)
+                for k, v in hit[1].items()}
+    if isinstance(node, Mapping):
+        return {k: resolve(v, rec) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [resolve(v, rec) for v in node]
+    return node
 
 
 class ConfigError(ValueError):
@@ -87,6 +127,7 @@ class Registry:
         or just the name.  Context values go to the factory's parameters of
         the same name, and only to those."""
         where = where or self.kind
+        raw = spec
         if isinstance(spec, str):
             spec = {"type": spec}
         if not isinstance(spec, Mapping) or "type" not in spec:
@@ -121,6 +162,13 @@ class Registry:
         if missing:
             raise ConfigError(f"{where}: {self.kind} {name!r} requires "
                               f"{missing}")
+        rec = _RECORD.get()
+        if rec is not None:
+            # signature order, every default written out; a **kwargs
+            # factory's extra keys as given
+            rec[id(raw)] = (raw, {"type": name, **{
+                k: given.get(k, p.default) for k, p in own.items()},
+                **{k: v for k, v in given.items() if k not in own}})
         ctx = {k: v for k, v in context.items() if k in needs}
         return factory(**given, **ctx)
 

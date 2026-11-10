@@ -20,6 +20,9 @@ summary of that column.
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import importlib.metadata
 import json
 import platform
 import subprocess
@@ -207,8 +210,30 @@ def analyse_stage(exp: Experiment, res: Results) -> None:
 
 def report_stage(exp: Experiment, res: Results) -> None:
     """run.json: what was run, how, what each stage found, where the outputs
-    are, and the provenance needed to reproduce it."""
+    are, and the provenance needed to reproduce it.  Beside it, the files
+    that make the run reproducible from this directory alone:
+
+        <out>.config.json   the resolved config (from_config runs)
+        <out>.script.py     the script that built the experiment (Python
+                            runs started as `python script.py`)
+        <out>.repo.patch    the package's uncommitted changes, when the
+                            checkout is dirty: commit + patch = the code
+
+    `provenance.source_digest` hashes the package's own files, so it
+    identifies the code even in a vendored copy with no git."""
     ev = events_path(exp.out)
+    prov = provenance()
+    files: dict[str, str] = {}
+    if exp.config is not None:
+        files["config"] = _write_beside(exp, "config.json", json.dumps(
+            exp.config, indent=1, default=str))
+    script = prov["script"]
+    if script and script["path"] and exp.config is None:
+        files["script"] = _write_beside(exp, "script.py",
+                                        Path(script["path"]).read_text())
+    diff = prov.pop("diff")
+    if diff:
+        files["repo_patch"] = _write_beside(exp, "repo.patch", diff)
     report = {
         "experiment": exp.describe(),
         "options": asdict(exp.options),
@@ -221,8 +246,9 @@ def report_stage(exp: Experiment, res: Results) -> None:
         "outputs": {"sink": str(exp.out), "events": str(ev),
                     "manifest": str(manifest_path(exp.out)),
                     "analysis": sorted(str(exp.path("analysis") / f"{k}.csv")
-                                       for k in res.analysis)},
-        "provenance": provenance(),
+                                       for k in res.analysis),
+                    **files},
+        "provenance": prov,
     }
     res.report_path = exp.path("run.json")
     res.report_path.write_text(json.dumps(report, indent=1, default=str))
@@ -247,6 +273,8 @@ class Experiment:
     report: Stage | None = report_stage
     # set by `sharded` only, so not an __init__ argument
     shard: tuple[int, int] | None = field(default=None, init=False)
+    # the resolved config, set by `from_config`; None when built in Python
+    config: dict[str, Any] | None = field(default=None, init=False)
 
     STAGES = ("calibrate", "dry_run", "execute", "analyse", "report")
 
@@ -309,7 +337,7 @@ class Experiment:
             raise ValueError(f"already shard {self.shard}")
         shard = check_shard((i, n))
         exp = replace(self, out=shard_path(self.out, i, n))
-        exp.shard = shard
+        exp.shard, exp.config = shard, self.config
         return exp
 
     def merge(self, n: int) -> Results:
@@ -327,7 +355,7 @@ class Experiment:
             if stage is not None:
                 stage(self, res)
         status, counts = job_status(self.out, self.planned())
-        prov = provenance()
+        prov = checkout()
         res.marker = {"job_hash": res.job_hash, "status": status,
                       "halted": None, "counts": counts,
                       "merged_from": n, "finished_at": utc_now(),
@@ -435,7 +463,7 @@ class Experiment:
             res.marker = prior
             return res
         status, counts = job_status(self.out, self.planned())
-        prov = provenance()
+        prov = checkout()
         res.marker = {"job_hash": res.job_hash,
                       "status": "halted" if res.halted else status,
                       "halted": res.halted, "counts": counts,
@@ -489,27 +517,104 @@ def write_marker(path: Path, record: Mapping[str, Any]) -> None:
         json.dumps(dict(record), indent=1, default=str)))
 
 
-def provenance() -> dict[str, Any]:
+def _write_beside(exp: Experiment, name: str, text: str) -> str:
+    path = exp.path(name)
+    write_atomic(path, lambda tmp: tmp.write_text(text))
+    return str(path)
+
+
+def source_digest(pkg: Path) -> str:
+    """sha256 over the package's .py files (relative path and bytes, in
+    sorted order).  Equal digests mean the same code, with or without git,
+    and an edit anywhere in the package changes it."""
+    h = hashlib.sha256()
+    for f in sorted(pkg.rglob("*.py")):
+        h.update(f.relative_to(pkg).as_posix().encode() + b"\0")
+        h.update(f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def _git(pkg: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(pkg), *args], capture_output=True,
+                          text=True, timeout=10, check=True).stdout
+
+
+def _script() -> dict[str, Any] | None:
+    """The script `python script.py` ran, with its digest, or None under
+    `python -m`, an interactive session or a test runner."""
+    main = sys.modules.get("__main__")
+    path = getattr(main, "__file__", None)
+    if (not path or not path.endswith(".py") or getattr(main, "__spec__", None)
+            is not None or not Path(path).is_file()):
+        return {"path": None, "argv": list(sys.argv)}
+    return {"path": str(Path(path).resolve()), "argv": list(sys.argv),
+            "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+
+PACKAGE = Path(__file__).resolve().parent
+
+
+def checkout(pkg: Path = PACKAGE) -> dict[str, Any]:
+    """The commit and dirty flag alone (None, None outside a git checkout),
+    for the completion marker, which is written often."""
+    try:
+        return {"commit": _git(pkg, "rev-parse", "HEAD").strip(),
+                "dirty": bool(_git(pkg, "status", "--porcelain", "--",
+                                   ".").strip())}
+    except (OSError, subprocess.SubprocessError):  # no git, or not a checkout
+        return {"commit": None, "dirty": None}
+
+
+@functools.cache
+def _distributions() -> dict[str, str]:
+    """Every installed distribution's version (fixed for a process)."""
+    return dict(sorted((d.metadata["Name"], d.version)
+                       for d in importlib.metadata.distributions()
+                       if d.metadata["Name"]))
+
+
+def provenance(pkg: Path = PACKAGE) -> dict[str, Any]:
     """Enough to say what produced a result: when, on what, with which
-    versions -- including the evalcore commit when run from a checkout."""
+    versions.  The code is identified three ways: `source_digest` (always),
+    the commit (from a checkout), and `diff`, the package's uncommitted
+    changes against that commit with untracked files listed (report_stage
+    writes it to a .patch file).  `distributions` lists every installed
+    package's version."""
     versions = {}
     for mod in ("numpy", "pandas", "scipy", "torch", "transformers", "httpx"):
         m = sys.modules.get(mod)
         if m is not None:
             versions[mod] = getattr(m, "__version__", "?")
-    pkg = Path(__file__).resolve().parent
+    co = checkout(pkg)
+    commit, dirty = co["commit"], co["dirty"]
+    untracked: list[str] = []
+    diff, prefix = "", None
     try:
-        commit = subprocess.run(["git", "-C", str(pkg), "rev-parse", "HEAD"],
-                                capture_output=True, text=True, timeout=5,
-                                check=True).stdout.strip()
-        dirty = bool(subprocess.run(
-            ["git", "-C", str(pkg), "status", "--porcelain", "--", "."],
-            capture_output=True, text=True, timeout=5,
-            check=True).stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        commit, dirty = None, None
+        if commit is not None:          # where the package sits in the repo
+            prefix = _git(pkg, "rev-parse", "--show-prefix").strip() or "."
+        if dirty:
+            # paths relative to the package directory, binary-safe:
+            # `git apply --directory=<pkg path in repo>` from the repo root
+            diff = _git(pkg, "diff", "--binary", "--relative", "HEAD", "--", ".")
+            untracked = _git(pkg, "ls-files", "--others", "--exclude-standard",
+                             "--", ".").split()
+            for u in untracked:     # new files, as patches against nothing
+                diff += subprocess.run(
+                    ["git", "-C", str(pkg), "diff", "--binary", "--no-index",
+                     "--", "/dev/null", u], capture_output=True, text=True,
+                    timeout=10, check=False).stdout   # exit 1 = "differs"
+    except (OSError, subprocess.SubprocessError) as exc:
+        # the checkout answered rev-parse and status a moment ago
+        raise RuntimeError(f"git failed in a checkout that answered "
+                           f"rev-parse a moment ago: {exc}") from exc
     from . import __version__
     return {"time": utc_now(),
             "evalcore": __version__, "commit": commit, "dirty": dirty,
+            "source_digest": source_digest(pkg), "untracked": untracked,
+            # the code again: git checkout <commit>, then from the repo root
+            # git apply --directory=<package_dir> <out>.repo.patch
+            "package_dir": prefix,
+            "diff": diff, "script": _script(),
             "python": platform.python_version(), "platform": platform.platform(),
-            "versions": versions}
+            "versions": versions,
+            "distributions": _distributions()}
