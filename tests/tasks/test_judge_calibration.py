@@ -92,3 +92,16 @@ def test_calibration_set_size_ids_clusters_and_determinism():
     other, _ = calibration_set(world, items, seed=1)
     assert [it.payload["answer"] for it in other] != \
         [it.payload["answer"] for it in judge]
+
+
+def test_a_town_without_a_twin_gets_no_twin_variant():
+    """make_world(21) pairs towns as (t, t+"ford"): the 21st has no twin.
+    Its questions get every numeric kind but "twin"; the others all ten."""
+    world = make_world(21, seed=0)
+    items = search_qa_items(world, seed=0)
+    _, labels = calibration_set(world, items)
+    numeric = labels[labels["qtype"].isin(["pop", "river_pop"])]
+    kinds = numeric.groupby("cluster")["kind"].apply(set)
+    full, short = set(NUMERIC_KINDS), set(NUMERIC_KINDS) - {"twin"}
+    assert set(map(frozenset, kinds)) <= {frozenset(full), frozenset(short)}
+    assert any(k == short for k in kinds) and any(k == full for k in kinds)

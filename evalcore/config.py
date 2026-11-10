@@ -424,6 +424,12 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
     with recording() as rec:
         exp = _build(cfg, base)
     resolved = resolve(cfg, rec)
+    if "plugins" in cfg:
+        # a .py plugin is found relative to the config file, and the resolved
+        # config is written beside the sink, elsewhere: absolute paths
+        resolved["plugins"] = [
+            str(((base / n) if base is not None else Path(n)).resolve())
+            if n.endswith(".py") else n for n in cfg["plugins"]]
     resolved["repeats"] = exp.repeats
     resolved["tags"] = dict(cfg.get("tags", {}))
     resolved["options"] = asdict(exp.options)

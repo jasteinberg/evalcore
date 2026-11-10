@@ -224,3 +224,27 @@ def test_duplicate_verdicts_are_refused():
     df = long({"A": [1, 0], "B": [1, 0]})
     with pytest.raises(ValueError, match="duplicate"):
         agreement(pd.concat([df, df.iloc[[0]]]))
+
+
+def test_ratio_se_with_the_whole_domain_in_one_cluster_is_nan():
+    """All negatives in cluster 0: the one residual is 1 - (1/3)*3 = 0, so
+    eq. (1) gives 0.  That is no estimate of the spread: NaN."""
+    assert np.isnan(ratio_se(np.array([1, 0, 0]), np.array([3, 0, 0])))
+
+
+def test_ratio_se_counts_clusters_outside_the_domain_in_k():
+    """By hand: r = 3/5, residuals -0.2, -0.6, 0.8 and 0 for the den = 0
+    cluster, sum of squares 1.04, k = 4: sqrt(4/3 * 1.04) / 5."""
+    got = ratio_se(np.array([1, 0, 2, 0]), np.array([2, 1, 2, 0]))
+    assert got == pytest.approx(np.sqrt(4 / 3 * 1.04) / 5)
+
+
+def test_error_correlation_at_the_lower_bound_gives_infinite_n_eff():
+    """Two judges whose errors never coincide and cover every answer:
+    e_A = 1 - e_B, rho = -1 = -1/(J-1).  The mean error is constant, so
+    J / (1 + (J-1) rho) = 2/0 -> +inf."""
+    y = [1, 1, 1, 1]
+    out = error_correlation(long({"A": [0, 0, 1, 1], "B": [1, 1, 0, 0]},
+                                 reference=y))
+    assert out["rho_bar"] == pytest.approx(-1.0)
+    assert out["n_eff"] == float("inf")

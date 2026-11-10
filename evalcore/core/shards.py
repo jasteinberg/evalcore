@@ -138,14 +138,23 @@ def combine_shards(out: str | Path, n: int) -> Path:
     The rows are the shards' lines verbatim, after `merge_shards` has
     checked that no unit is in two shards.  The manifest keeps each planned
     unit's first record.  `<out>.shards.json` records that `out` is a merge,
-    and a merge overwrites only a previous merge: an `out` written any other
-    way holds rows that exist nowhere else, so it is refused."""
+    with the digest of what it wrote, and a merge overwrites only a previous
+    merge still as written.  An `out` written any other way, or appended to
+    since (an unsharded resume after the merge), holds rows that exist
+    nowhere else, so it is refused."""
     out = Path(out)
     mark = out.with_name(out.name + MERGED_SUFFIX)
     if out.exists() and not mark.exists():
         raise FileExistsError(
             f"{str(out)!r} exists and is not a previous merge. Move it away "
             f"first: merging would overwrite rows that exist only there")
+    if out.exists():
+        wrote = json.loads(mark.read_text())["sha256"]
+        if wrote != hashlib.sha256(out.read_bytes()).hexdigest():
+            raise FileExistsError(
+                f"{str(out)!r} changed since it was merged (a run added rows "
+                f"to it). Move it away first: merging would overwrite rows "
+                f"that exist only there")
     merge_shards(out, n)                              # refuses mixed partitions
     paths = [shard_path(out, i, n) for i in range(n)]
     # a crash can leave a shard's last line unterminated, and the next
@@ -164,5 +173,6 @@ def combine_shards(out: str | Path, n: int) -> Path:
     write_atomic(out, lambda tmp: tmp.write_text(rows))
     write_atomic(manifest_path(out), lambda tmp: tmp.write_text("".join(plan)))
     write_atomic(mark, lambda tmp: tmp.write_text(json.dumps(
-        {"n": n, "shards": [p.name for p in paths if p.exists()]})))
+        {"n": n, "shards": [p.name for p in paths if p.exists()],
+         "sha256": hashlib.sha256(rows.encode()).hexdigest()})))
     return out

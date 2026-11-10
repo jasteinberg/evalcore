@@ -128,7 +128,8 @@ def git(cwd: Path, *args: str) -> str:
 
 
 def test_commit_plus_patch_rebuild_the_code_that_ran(tmp_path):
-    """A dirty checkout (an edited file and a new one) is recorded.  A clean
+    """A dirty checkout (an edited file and a new one, whose name has a
+    space) is recorded.  A clean
     clone of the commit, with the patch applied as provenance says, must
     hash to the digest of the tree that ran."""
     if shutil.which("git") is None:
@@ -142,11 +143,11 @@ def test_commit_plus_patch_rebuild_the_code_that_ran(tmp_path):
     pkg = repo / "src" / "evalcore"
     (pkg / "core" / "spec.py").write_text(
         (pkg / "core" / "spec.py").read_text() + "\n# local edit\n")
-    (pkg / "scratch_plugin.py").write_text("X = 1\n")
+    (pkg / "scratch plugin.py").write_text("X = 1\n")   # a space in the name
 
     prov = provenance(pkg)
     assert prov["dirty"] is True
-    assert prov["untracked"] == ["scratch_plugin.py"]
+    assert prov["untracked"] == ["scratch plugin.py"]
     assert prov["package_dir"] == "src/evalcore/"
     patch = tmp_path / "run.repo.patch"
     patch.write_text(prov["diff"])
@@ -184,3 +185,18 @@ def test_a_dirty_run_writes_its_patch_beside_the_sink(tmp_path, monkeypatch):
     report = json.loads(res.report_path.read_text())
     assert report["outputs"]["repo_patch"] == str(patch)
     assert "diff" not in report["provenance"]          # in the file, not here
+
+
+def test_a_resolved_config_finds_its_plugins_from_anywhere(tmp_path,
+                                                          monkeypatch):
+    """A .py plugin is named relative to the config file.  The resolved
+    config lives beside the sink, so it must name the plugin absolutely."""
+    cdir = tmp_path / "configs"
+    cdir.mkdir()
+    (cdir / "my_plugin.py").write_text("X = 1\n")
+    cfg = {**file_cfg(tmp_path), "plugins": ["my_plugin.py"]}
+    (cdir / "c.json").write_text(json.dumps(cfg))
+    monkeypatch.chdir(tmp_path)                    # not where the plugin is
+    exp = from_config(cdir / "c.json")
+    assert exp.config["plugins"] == [str((cdir / "my_plugin.py").resolve())]
+    assert from_config(exp.config).job_hash() == exp.job_hash()

@@ -20,6 +20,10 @@ Outcomes, and the row status each becomes:
                                          tool's output, counted in
                                          meta["tool_input_errors"]
 
+A forced tool (params["tool_choice"]) applies to the first turn only: "search
+first" is a meaningful control, but forced on every turn the model could
+never answer without a tool call, and every episode would run to max_turns.
+
 Tool results can be cached content-addressed on (tool identity,
 arguments).  With live tools -- a web search whose results drift -- that
 cache is what makes a rerun see the same results, so pass one.
@@ -127,9 +131,11 @@ class AgentBackend(Backend):
                                   **kw, "in_tokens": total("in_tokens"),
                                   "out_tokens": total("out_tokens")})
 
-        for _ in range(self.max_turns):
+        later = {k: v for k, v in req.params.items() if k != "tool_choice"}
+        for turn_i in range(self.max_turns):
+            params = req.params if turn_i == 0 else later
             r = with_retries(self.inner.complete,
-                             Request(req.unit_id, msgs, req.params,
+                             Request(req.unit_id, msgs, params,
                                      tools=specs, repeat=req.repeat,
                                      item_id=req.item_id),
                              self.attempts)

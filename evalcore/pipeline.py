@@ -103,7 +103,7 @@ def calibrate_stage(exp: Experiment, res: Results) -> None:
     across cells -- or reuse a saved calibration of the same backend
     identity that is fresh enough, then derive run settings.  Explicit
     RunOptions win over derived ones, and the record says which applied."""
-    path = exp.path("calibration.json")
+    path = exp.calibration_path()
     cal = None if exp.options.recalibrate else _saved_calibration(exp, path)
     if cal is None:
         # interleaved across cells, so every cell's prompts are sampled.  A
@@ -116,7 +116,9 @@ def calibrate_stage(exp: Experiment, res: Results) -> None:
         k = 32 if exp.backend.supports_target else exp.options.calibrate_n
         sample = [rendered(exp.task.render, u) for u in interleaved[:k]]
         cal = calibrate(exp.backend, sample, n=exp.options.calibrate_n)
-        path.write_text(json.dumps(cal.to_dict(), indent=1))
+        # shards may share this file: replace it whole, never half-written
+        text = json.dumps(cal.to_dict(), indent=1)
+        write_atomic(path, lambda tmp: tmp.write_text(text))
     res.calibration = cal
     derived = derive(cal)
     o = exp.options
@@ -147,34 +149,59 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     are measured per call).  Halts over `max_cost` unless confirmed, and
     also when the calibration measured no token counts, so the cost of the
     calls still to make cannot be estimated: an unchecked budget is not a
-    budget."""
+    budget.
+
+    Under a shard, `max_cost` is the budget of the whole sweep, not of each
+    shard: the check is against every shard's calls still to make (read
+    from all the shard sinks), so n shards cannot spend n times it."""
     o = exp.options
     p = plan(exp.planned(), exp.backend, exp.task.render, exp.out, o.resume,
              o.retry_errors)
     cache = exp.cache()
-    cached = sum(1 for u in p.todo if cache and cache.has(p.keys[u.id]))
-    to_call = len(p.todo) - cached
+
+    def calls(q: Plan) -> int:
+        return sum(1 for u in q.todo if not (cache and cache.has(q.keys[u.id])))
+
+    to_call = calls(p)
+    cached = len(p.todo) - to_call
     d: dict[str, Any] = {"units": len(p.units), "done": p.done,
                          "to_go": len(p.todo), "cached": cached,
                          "to_call": to_call, "stale": p.stale,
                          "retried": p.retried}
+    budget_calls, scope = to_call, ""
+    if exp.shard is not None:
+        assert exp.whole is not None
+        i, n = exp.shard
+        whole = exp.units()[:o.limit]
+        budget_calls = to_call + sum(
+            calls(plan([u for u in whole if shard_of(u.id, n) == j],
+                       exp.backend, exp.task.render,
+                       shard_path(exp.whole, j, n), o.resume, o.retry_errors))
+            for j in range(n) if j != i)
+        d["sweep_to_call"], scope = budget_calls, "sweep_"
     cal = res.calibration
     if cal and cal.in_tokens is not None:
-        d["est_in_tokens"] = cal.in_tokens * to_call
-        d["est_out_tokens"] = (cal.out_tokens or 0.0) * to_call
-        if o.prices:
-            d["est_cost"] = (d["est_in_tokens"] * o.prices["in"]
-                             + d["est_out_tokens"] * o.prices["out"]) / 1e6
+        for pre, k in [("", to_call)] + ([(scope, budget_calls)] if scope
+                                         else []):
+            d[f"{pre}est_in_tokens"] = cal.in_tokens * k
+            d[f"{pre}est_out_tokens"] = (cal.out_tokens or 0.0) * k
+            if o.prices:
+                d[f"{pre}est_cost"] = (d[f"{pre}est_in_tokens"] * o.prices["in"]
+                                       + d[f"{pre}est_out_tokens"]
+                                       * o.prices["out"]) / 1e6
     res.plan, res.dry_run = p, d
     budgeted = o.max_cost is not None and not o.confirm
-    if budgeted and to_call and "est_cost" not in d:
+    cost_key = f"{scope}est_cost"
+    whose = "the whole sweep's " if scope else ""
+    if budgeted and budget_calls and cost_key not in d:
         res.halted = (f"max_cost ${o.max_cost:.2f} cannot be checked: the "
                       f"calibration measured no token counts for "
                       f"{exp.backend.name}. Rerun with confirm=True to proceed "
                       f"unbudgeted")
-    elif budgeted and d.get("est_cost", 0.0) > o.max_cost:
-        res.halted = (f"estimated cost ${d['est_cost']:.2f} exceeds max_cost "
-                      f"${o.max_cost:.2f}. Rerun with confirm=True to proceed")
+    elif budgeted and d.get(cost_key, 0.0) > o.max_cost:
+        res.halted = (f"{whose}estimated cost ${d[cost_key]:.2f} exceeds "
+                      f"max_cost ${o.max_cost:.2f}. Rerun with confirm=True "
+                      f"to proceed")
     elif o.dry_run_only:
         res.halted = "dry run only"
 
@@ -271,8 +298,10 @@ class Experiment:
     execute: Stage | None = execute_stage
     analyse: Stage | None = analyse_stage
     report: Stage | None = report_stage
-    # set by `sharded` only, so not an __init__ argument
+    # set by `sharded` only, so not __init__ arguments: (i, n), and the
+    # unsharded sink, beside which the shards share one calibration
     shard: tuple[int, int] | None = field(default=None, init=False)
+    whole: Path | None = field(default=None, init=False)
     # the resolved config, set by `from_config`; None when built in Python
     config: dict[str, Any] | None = field(default=None, init=False)
 
@@ -329,15 +358,17 @@ class Experiment:
 
     def sharded(self, i: int, n: int) -> Experiment:
         """This experiment as shard i of n: its own sink at
-        `shard_path(out, i, n)` (calibration, report and marker beside it),
+        `shard_path(out, i, n)` (report and marker beside it; the
+        calibration is shared, beside `out`),
         only its share of the units, and no analysis, since one shard's
         tables would describe a fraction of the sweep.  `merge(n)` analyses
         the whole once the shards are done."""
         if self.shard is not None:
             raise ValueError(f"already shard {self.shard}")
         shard = check_shard((i, n))
+        assert isinstance(self.out, Path)
         exp = replace(self, out=shard_path(self.out, i, n))
-        exp.shard, exp.config = shard, self.config
+        exp.shard, exp.whole, exp.config = shard, self.out, self.config
         return exp
 
     def merge(self, n: int) -> Results:
@@ -348,6 +379,7 @@ class Experiment:
         if self.shard is not None:
             raise ValueError("merge the unsharded experiment, not a shard")
         assert isinstance(self.out, Path)
+        self._check_shard_jobs(n)
         combine_shards(self.out, n)
         res = Results(self.out, job_hash=self.job_hash())
         res.frame = to_frame(self.out)
@@ -362,6 +394,35 @@ class Experiment:
                       "commit": prov["commit"], "dirty": prov["dirty"]}
         write_marker(self.path("done"), res.marker)
         return res
+
+    def _check_shard_jobs(self, n: int) -> None:
+        """Every shard that wrote anything ran THIS job: its marker holds
+        the job hash this experiment gives that shard.  Otherwise (a model
+        or default changed between the shards and the merge) the merge
+        would mark one job's rows complete under another job's hash."""
+        for i in range(n):
+            shard = self.sharded(i, n)
+            assert isinstance(shard.out, Path)
+            marker = read_marker(shard.path("done"))
+            if marker is None:
+                if shard.out.exists():
+                    raise ValueError(
+                        f"shard {i}: {shard.out.name} has rows but no "
+                        f"marker, so which job it ran is unknown")
+                continue                    # never started: counted missing
+            if marker["job_hash"] != shard.job_hash():
+                raise ValueError(
+                    f"shard {i} ran job {marker['job_hash']}, but this config "
+                    f"gives that shard job {shard.job_hash()}: the config "
+                    f"changed since the shards ran. Rerun them, or merge with "
+                    f"the config they ran")
+
+    def calibration_path(self) -> Path:
+        """`<out>.calibration.json`, the unsharded `out` under a shard, so a
+        sweep calibrates once, not once per shard."""
+        out = self.whole if self.whole is not None else self.out
+        assert isinstance(out, Path)
+        return out.with_name(f"{out.name}.calibration.json")
 
     def cache(self) -> Cache | None:
         return Cache(self.options.cache_dir) if self.options.cache_dir else None
@@ -596,13 +657,19 @@ def provenance(pkg: Path = PACKAGE) -> dict[str, Any]:
             # paths relative to the package directory, binary-safe:
             # `git apply --directory=<pkg path in repo>` from the repo root
             diff = _git(pkg, "diff", "--binary", "--relative", "HEAD", "--", ".")
-            untracked = _git(pkg, "ls-files", "--others", "--exclude-standard",
-                             "--", ".").split()
+            # NUL-separated: a file name may hold spaces or newlines
+            untracked = [u for u in _git(pkg, "ls-files", "-z", "--others",
+                                         "--exclude-standard", "--",
+                                         ".").split("\0") if u]
             for u in untracked:     # new files, as patches against nothing
-                diff += subprocess.run(
+                p = subprocess.run(
                     ["git", "-C", str(pkg), "diff", "--binary", "--no-index",
                      "--", "/dev/null", u], capture_output=True, text=True,
-                    timeout=10, check=False).stdout   # exit 1 = "differs"
+                    timeout=10, check=False)
+                if p.returncode not in (0, 1):     # 1 = "differs", the norm
+                    raise RuntimeError(f"git diff of untracked {u!r} failed "
+                                       f"({p.returncode}): {p.stderr.strip()}")
+                diff += p.stdout
     except (OSError, subprocess.SubprocessError) as exc:
         # the checkout answered rev-parse and status a moment ago
         raise RuntimeError(f"git failed in a checkout that answered "

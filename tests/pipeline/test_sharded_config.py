@@ -112,3 +112,33 @@ def test_a_malformed_shard_argument_is_refused(tmp_path, bad):
     cfg, _ = config(tmp_path, "s")
     with pytest.raises((SystemExit, ValueError)):
         main(["run", str(cfg), "--shard", bad])
+
+
+def test_merge_refuses_shards_that_ran_another_job(tmp_path):
+    """batch_size enters the job hash and not the unit ids: shards run at
+    the default, then the config changed, must not merge as complete."""
+    cfg, out = config(tmp_path, "s")
+    for i in range(N):
+        main(["run", str(cfg), "--shard", f"{i}/{N}"])
+    c = json.loads(cfg.read_text())
+    c["options"]["batch_size"] = 2
+    cfg.write_text(json.dumps(c))
+    with pytest.raises(ValueError, match="config changed since the shards"):
+        main(["merge", str(cfg), "--shards", str(N)])
+    assert not out.exists()
+
+
+def test_a_remerge_keeps_rows_a_resume_added_after_the_merge(tmp_path):
+    """Two shards merged, then an unsharded resume fills the third shard's
+    units into the merged sink: those rows exist only there, so a second
+    merge must refuse rather than overwrite them."""
+    cfg, out = config(tmp_path, "s")
+    for i in (0, 2):
+        main(["run", str(cfg), "--shard", f"{i}/{N}"])
+    main(["merge", str(cfg), "--shards", str(N)])
+    main(["run", str(cfg)])                                     # resume
+    assert len(to_frame(out)) == N_TASKS
+    before = out.read_text()
+    with pytest.raises(FileExistsError, match="changed since it was merged"):
+        main(["merge", str(cfg), "--shards", str(N)])
+    assert out.read_text() == before

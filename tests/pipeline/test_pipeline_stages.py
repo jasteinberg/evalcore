@@ -203,3 +203,35 @@ def test_d26_every_unservable_request_is_refused_before_spend(tmp_path):
                                          r".*cannot teacher-force"):
         make(tmp_path, fn=fn, its=its)
     assert fn.calls.total() == 0
+
+
+# --- shards share one calibration and one budget ------------------------------
+
+def test_shards_calibrate_once_and_share_the_file(tmp_path):
+    """5 calibration calls for the sweep, then one call per unit: 5 + 6."""
+    exp, fn = make(tmp_path)
+    for i in range(3):
+        exp.sharded(i, 3).run()
+    assert fn.calls.total() == 5 + 6
+    assert (tmp_path / "r.jsonl.calibration.json").exists()
+    assert not list(tmp_path.glob("r.shard*.calibration.json"))
+
+
+def test_max_cost_bounds_the_whole_sweep_not_each_shard(tmp_path):
+    """$0.105 per call (the single-run case above: $0.63 for 6).  One
+    shard's own share is under $0.50, the sweep's 6 calls are not, so every
+    shard halts; once the other shards are done, the last one's sweep
+    estimate is its own calls and it proceeds."""
+    budget = RunOptions(prices={"in": 1000.0, "out": 1000.0}, max_cost=0.5)
+    exp, _ = make(tmp_path, options=budget)
+    res = exp.sharded(0, 3).run()
+    assert res.dry_run["est_cost"] < 0.5
+    assert res.halted.startswith("the whole sweep's estimated cost $0.63")
+    for i in (1, 2):
+        confirmed = make(tmp_path, options=RunOptions(
+            prices={"in": 1000.0, "out": 1000.0}, max_cost=0.5,
+            confirm=True))[0]
+        confirmed.sharded(i, 3).run()
+    res = exp.sharded(0, 3).run()
+    assert res.halted is None
+    assert res.dry_run["sweep_to_call"] == res.dry_run["to_call"]

@@ -252,3 +252,21 @@ def test_an_episode_reports_tokens_summed_over_its_turns():
     r = episode(policy)
     assert (r.meta["in_tokens"], r.meta["out_tokens"]) == (460, 52)
     assert [t["in_tokens"] for t in r.meta["trajectory"]] == [100, 150, 210]
+
+
+def test_a_forced_tool_applies_to_the_first_turn_only():
+    """A model that obeys tool_choice: forced on every turn it could never
+    answer.  Forced on the first only, the episode is search, then answer."""
+    seen: list[object] = []
+
+    def obeys(req: Request):
+        seen.append(req.params.get("tool_choice"))
+        if req.params.get("tool_choice") == "search":
+            return call("search", {"query": "Velor"})
+        return Response("x", text="done", meta={"truncated": False})
+
+    be = AgentBackend(scripted(obeys), [CorpusSearch(DOCS).tool], max_turns=4)
+    r = be.complete(Request("u", [{"role": "user", "content": "q"}],
+                            {"tool_choice": "search"}))
+    assert r.text == "done" and r.meta["turns"] == 2
+    assert seen == ["search", None]

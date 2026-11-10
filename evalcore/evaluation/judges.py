@@ -106,10 +106,17 @@ def _binary(df: pd.DataFrame, col: str, where: str) -> np.ndarray:
 
 def ratio_se(num: np.ndarray, den: np.ndarray) -> float:
     """Cluster-robust standard error of sum(num)/sum(den), eq. (1).  One
-    entry per cluster.  NaN with fewer than two clusters."""
+    entry per cluster.
+
+    k counts every sampled cluster, also those with den = 0 (the domain
+    convention: the clusters were sampled, the domain size per cluster is
+    random).  Such a cluster has num = 0 and adds nothing to the sum.  When
+    fewer than two clusters have den > 0, every residual is zero by
+    construction (num_c - r den_c = 0 for the one cluster that holds the
+    domain), and eq. (1) would return 0, not an estimate: NaN instead."""
     num, den = np.asarray(num, float), np.asarray(den, float)
     k, total = len(num), den.sum()
-    if k < 2 or total == 0:
+    if k < 2 or total == 0 or (den > 0).sum() < 2:
         return float("nan")
     r = num.sum() / total
     return float(np.sqrt(k / (k - 1) * ((num - r * den) ** 2).sum()) / total)
@@ -254,9 +261,15 @@ def error_correlation(df: pd.DataFrame, verdict: str = "verdict",
     vals = np.array(list(pairs.values()))
     rho = float(vals.mean()) if np.isfinite(vals).all() else float("nan")
     n_j = len(judges)
+    # Var(sum of standardised errors) = J(1 + (J-1) rho_bar) >= 0, so
+    # rho_bar >= -1/(J-1).  At the bound the panel's mean error has zero
+    # variance (the judges' errors cancel exactly), and n_eff -> +inf
+    denom = 1 + (n_j - 1) * rho
+    n_eff = (float("nan") if not np.isfinite(rho)
+             else float("inf") if denom <= 1e-12 else n_j / denom)
     return {"judges": judges, "n": len(w), "pairs": pairs,
             "error_rates": {j: float(w[j].mean()) for j in judges},
-            "rho_bar": rho, "n_eff": n_j / (1 + (n_j - 1) * rho)}
+            "rho_bar": rho, "n_eff": n_eff}
 
 
 def majority(df: pd.DataFrame, judges: Sequence[str],

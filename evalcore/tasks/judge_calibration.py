@@ -189,7 +189,11 @@ def calibration_set(world: World, items: Sequence[Item], seed: int = 0
         if p["meta"]["type"] in ("pop", "river_pop"):
             town = entity[p["gold_docs"][-1]]
             twin = world.towns.get(_twin_name(town), {}).get("population")
-            vs = answer_variants(int(p["gold"]), NUMERIC_KINDS, rng, twin=twin)
+            # an odd n_towns leaves the last town without a twin, and a twin
+            # with the same population is not a wrong answer: no twin variant
+            kinds = (NUMERIC_KINDS if twin is not None and twin != int(p["gold"])
+                     else tuple(k for k in NUMERIC_KINDS if k != "twin"))
+            vs = answer_variants(int(p["gold"]), kinds, rng, twin=twin)
         else:
             vs = answer_variants(str(p["gold"]), RIVER_KINDS, rng,
                                  rivers=rivers)
