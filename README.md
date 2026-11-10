@@ -76,7 +76,7 @@ statuses and statistics, is the same for all of them.
 | many prompts sharing a prefix | any `HFBackend` request | `HFBackend(prefix_cache=True, prefix_slots=K)` | `n_prefix_reused`, `prefix_slot` | outputs equal to a full forward, within float tolerance |
 | tool use | `messages`. The tools come from the backend | `AgentBackend(inner, tools)` | `trajectory`, `turns`, `n_tool_calls`, `tool_input_errors`, `truncated_by` | `attrition`: `tool_error` and `truncated` are their own states |
 | retrieval | items with `gold_docs` | `RetrieverBackend` over `BM25`, `DenseRetriever`, `Reranker` | the ranked document ids | `score_ranked`, `retrieval_summary` |
-| judging | a question, a reference and a response, with a `verdict` tool | `HTTPBackend`, one per judge (`run_panel`) | `v_<criterion>` (0 or 1) and `verdict_reason` | `evaluation.judges`: `calibrate`, `debiased_mean`, `agreement`, `error_correlation`, `majority` |
+| judging | a question, a reference and a response, with a `verdict` tool | `HTTPBackend`, one per judge (`run_panel`) | `v_<criterion>` (0 or 1) and `verdict_reason` | `evaluation.judges`: `judge_error_rates`, `debiased_mean`, `agreement`, `error_correlation`, `majority` |
 
 Across all of them:
 
@@ -452,8 +452,17 @@ of the sweep. `merge` writes the shards' rows and the whole plan to `out`,
 then analyses and reports it as an unsharded run would. Every shard's
 manifest records the whole plan, so the units of a shard that never started
 count as missing. Running the late shard and merging again fills them in.
-From Python the same is `exp.sharded(i, n).run()` and `exp.merge(n)`, or
-`execute(..., shard=(i, n))` with `merge_shards`.
+A script that builds its `Experiment` in Python needs no config to do the
+same. It shards itself:
+
+```python
+exp = Experiment(task, backend, cells, "runs/x.jsonl", metric="correct")
+exp.sharded(*shard_from_env()).run()     # in each array task
+exp.merge(16)                            # afterwards
+```
+
+Below the pipeline, `execute(..., shard=(i, n))` and `merge_shards` do the
+same for a bare run.
 
 ## Outputs
 

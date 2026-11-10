@@ -11,10 +11,10 @@ import pytest
 
 from evalcore.evaluation.judges import (
     agreement,
-    calibrate,
     debias,
     debiased_mean,
     error_correlation,
+    judge_error_rates,
     majority,
     ratio_se,
 )
@@ -53,7 +53,7 @@ def test_ratio_se_with_one_row_per_cluster_is_the_binomial_se():
 
 def test_calibrate_hand_case():
     df = long({"A": [1, 1, 0, 1, 0, 0]}, reference=[1, 1, 1, 0, 0, 0])
-    row = calibrate(df).iloc[0]
+    row = judge_error_rates(df).iloc[0]
     assert (row.tp, row.fn, row.fp, row.tn) == (2, 1, 1, 2)
     assert row.alpha == pytest.approx(1 / 3) and row.beta == pytest.approx(1 / 3)
     assert row.lam == pytest.approx(1 / 3)
@@ -63,9 +63,9 @@ def test_calibrate_hand_case():
 def test_calibrate_refuses_non_binary_and_missing_reference():
     df = long({"A": [1, 0]}, reference=[1, 0])
     with pytest.raises(ValueError, match="0 or 1"):
-        calibrate(df.assign(verdict=[1, 2]))
+        judge_error_rates(df.assign(verdict=[1, 2]))
     with pytest.raises(ValueError, match="missing values"):
-        calibrate(df.assign(reference=[1.0, np.nan]))
+        judge_error_rates(df.assign(reference=[1.0, np.nan]))
 
 
 # --- debiasing --------------------------------------------------------------

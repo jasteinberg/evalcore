@@ -11,7 +11,7 @@ import re
 import pytest
 
 from evalcore import Cell, FunctionBackend, Item, Request, Response, Task
-from evalcore.evaluation.judges import calibrate, majority
+from evalcore.evaluation.judges import judge_error_rates, majority
 from evalcore.tasks.judge import (
     TOOL,
     Criterion,
@@ -153,7 +153,7 @@ def test_panel_end_to_end_recovers_the_judges_error_rates(tmp_path):
     long = verdicts_long(judged, [CORRECT], source=df,
                          reference={"correct": "correct"})
     assert len(long) == 12 and long["reference"].isna().sum() == 3
-    cal = calibrate(long.dropna(subset=["reference"])).set_index("judge")
+    cal = judge_error_rates(long.dropna(subset=["reference"])).set_index("judge")
     assert (cal.loc["honest", "alpha"], cal.loc["honest", "beta"]) == (0, 0)
     assert (cal.loc["lenient", "alpha"], cal.loc["lenient", "beta"]) == (1, 0)
     assert (cal.loc["contrary", "alpha"], cal.loc["contrary", "beta"]) == (1, 1)

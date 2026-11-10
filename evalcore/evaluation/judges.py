@@ -81,8 +81,8 @@ from scipy import stats as sps
 
 from .stats import cluster_bootstrap, mcnemar_exact
 
-__all__ = ["agreement", "calibrate", "debias", "debiased_mean",
-           "error_correlation", "majority", "ratio_se"]
+__all__ = ["agreement", "debias", "debiased_mean",
+           "error_correlation", "judge_error_rates", "majority", "ratio_se"]
 
 KEYS = ("answer", "criterion")
 
@@ -115,13 +115,13 @@ def ratio_se(num: np.ndarray, den: np.ndarray) -> float:
     return float(np.sqrt(k / (k - 1) * ((num - r * den) ** 2).sum()) / total)
 
 
-def calibrate(df: pd.DataFrame, by: Sequence[str] = ("judge", "criterion"),
+def judge_error_rates(df: pd.DataFrame, by: Sequence[str] = ("judge", "criterion"),
               verdict: str = "verdict", reference: str = "reference",
               cluster: str = "cluster") -> pd.DataFrame:
     """The 2x2 confusion matrix against the reference, alpha, beta and
     lambda = 1 - alpha - beta, with cluster-robust standard errors (eq. 1),
     one row per group in `by`."""
-    where = "calibrate"
+    where = "judge_error_rates"
     _require(df, [*by, verdict, reference, cluster], where)
     v, y = _binary(df, verdict, where), _binary(df, reference, where)
     d = df.assign(_tp=v * y, _fn=(1 - v) * y, _fp=v * (1 - y),
@@ -171,7 +171,7 @@ def debiased_mean(df: pd.DataFrame, cal: Mapping[str, Any],
                   cluster: str = "cluster", n_boot: int = 10_000,
                   seed: int = 0) -> dict[str, float]:
     """The debiased pass rate of one judge on one criterion over `df`, with
-    `cal` a row of `calibrate` for that judge and criterion.  m and its se
+    `cal` a row of `judge_error_rates` for that judge and criterion.  m and its se
     come from the cluster bootstrap.  Refuses any cluster shared with the
     calibration set: eq. (3) assumes independent errors in m and in
     (alpha, beta), and a shared item also means the reference was there."""

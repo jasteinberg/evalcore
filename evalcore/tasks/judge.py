@@ -7,7 +7,7 @@ second run, in which each judge returns a structured verdict.
     long   = verdicts_long(frame, criteria, source=frame0,
                            reference={"correct": "correct"})
 
-and evaluation/judges.py takes the long frame from there (calibrate,
+and evaluation/judges.py takes the long frame from there (judge_error_rates,
 debias, agreement, error_correlation, majority).
 
 Because judging is an ordinary run, it inherits the cache, resume and
