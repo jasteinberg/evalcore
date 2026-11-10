@@ -68,7 +68,7 @@ statuses and statistics, is the same for all of them.
 
 | experiment | the request carries | backend | the row gets (`meta_*`) | analyse with |
 |---|---|---|---|---|
-| graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts, `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two conditions |
+| graded generation | `messages`, sampling `params` | `HTTPBackend`, `HFBackend(generate=True)`, `FunctionBackend` | `text`, token counts (`out_tokens` is the billed output, thinking included), `truncated` | a grader (`make_score`), `summarize`, `paired_bootstrap` for two conditions |
 | teacher-forced scoring | `target`: the continuation to score | `HFBackend` | per target token `logp` and `argmax_ok`, plus `sum_logp` and `em_tf` | `tasks.graders.score_teacher_forced`, `axis_curves` along a model axis |
 | candidate scoring | `candidates`: token ids, prompt as text or `input_ids` | `HFBackend` | `cand_logp` over the full vocabulary, `cand_mass`, `leakage`, `top1_id` | your own `score`, `value_curves` along a swept setting |
 | activation capture | any of the above | `HFBackend(probe=...)` | what the probe's `collect` returns. Arrays go to an `.npz` sidecar named in `meta_arrays` | `load_arrays` |
@@ -76,6 +76,7 @@ statuses and statistics, is the same for all of them.
 | many prompts sharing a prefix | any `HFBackend` request | `HFBackend(prefix_cache=True, prefix_slots=K)` | `n_prefix_reused`, `prefix_slot` | outputs equal to a full forward, within float tolerance |
 | tool use | `messages`. The tools come from the backend | `AgentBackend(inner, tools)` | `trajectory`, `turns`, `n_tool_calls`, `tool_input_errors`, `truncated_by` | `attrition`: `tool_error` and `truncated` are their own states |
 | retrieval | items with `gold_docs` | `RetrieverBackend` over `BM25`, `DenseRetriever`, `Reranker` | the ranked document ids | `score_ranked`, `retrieval_summary` |
+| judging | a question, a reference and a response, with a `verdict` tool | `HTTPBackend`, one per judge (`run_panel`) | `v_<criterion>` (0 or 1) and `verdict_reason` | `evaluation.judges`: `calibrate`, `debiased_mean`, `agreement`, `error_correlation`, `majority` |
 
 Across all of them:
 
@@ -155,7 +156,7 @@ locally.
 |---|---|
 | `spec.py` | `Cell`, `Item`, `Unit`, `grid`, `digest`: content-addressed identity |
 | `backends/base.py` | `Request`, `Response`, the `Backend` contract, `request_key`, retries |
-| `backends/http.py` | `HTTPBackend`: Anthropic, OpenAI and Gemini, including tool calls |
+| `backends/http.py` | `HTTPBackend`: Anthropic, OpenAI and Gemini, including tool calls and a forced `tool_choice` |
 | `backends/hf.py` | `HFBackend`: local generation, teacher-forced scoring, candidate scoring, opt-in prefix KV-cache reuse |
 | `backends/probe.py` | `Probe`, `FunctionProbe`: capture from inside each forward pass |
 | `backends/cache.py` | `Cache`: one JSON file per request key |
@@ -176,10 +177,12 @@ locally.
 |---|---|
 | `base.py` | `Task`: items, `render(unit) -> Request`, `score(unit, response) -> dict` |
 | `formats.py` | the canonical task format. `load_tasks` translates foreign JSON with a field mapping |
-| `graders.py` | `exact`, `contains`, `numeric`, `choice`, `yes_no`, `set_f1`, `abstain`, `label`, `score_teacher_forced` |
+| `graders.py` | `exact`, `contains`, `numeric`, `choice`, `yes_no`, `set_f1`, `abstain`, `label`, `score_teacher_forced`. `"abstain": true` on any spec scores correct, wrong and abstained separately |
 | `arithmetic.py` | addition by teacher forcing (the emergence experiments) |
 | `log_qa.py` | questions over generated execution traces, with exact gold |
 | `search_qa.py` | questions answerable only by searching an invented corpus. Carries the gold documents |
+| `judge.py` | judging as a second run over a finished run's answers: `judge_items`, `judge_task`, `run_panel`, `verdicts_long` |
+| `judge_calibration.py` | answers whose correctness is known by construction, for measuring judges |
 
 **`evaluation/`: what the numbers mean**
 
@@ -189,6 +192,7 @@ locally.
 | `attrition.py` | per-cell accounting of the plan in six states |
 | `curves.py` | curves along a model axis: susceptibility, composition, crossings, with item-paired intervals |
 | `retrieval.py` | recall@k, hit@k, nDCG@k, MRR |
+| `judges.py` | judge error rates, debiasing, agreement, error correlation and the panel's `n_eff`, the majority verdict |
 | `baselines.py`, `contamination.py`, `plots.py` | floors to beat, n-gram overlap checks, figures |
 
 **Top level**
@@ -213,8 +217,8 @@ small interface at each point and checks it.
 | a quick model | `FunctionBackend(fn, identity=...)` | `fn(request) -> str` |
 | activation capture | `Probe.identity`, `hooks`, `collect` | hooks see the padded batch (only the uncached tail under `prefix_cache`). `collect` returns one dict per request. Arrays go to sidecars |
 | a task | `Task(name, items, render, score)`, or a JSONL file | `Task.from_file(path, mapping=...)` for a foreign format |
-| a grader | `@grader("name")` in `tasks/graders.py` | raise `ParseFailure` when the answer cannot be read |
-| a tool | `Tool(name, description, parameters, fn)` | `ToolInputError` goes back to the model. `ToolUnavailable` ends the episode as `tool_error` |
+| a grader | `@grader("name")` in `tasks/graders.py` | raise `ParseFailure` when the answer cannot be read. `"abstain": true` in a spec adds the abstained outcome to any grader |
+| a tool | `Tool(name, description, parameters, fn)`, or `uses_context=True` and `fn(arguments, ctx)` for a tool that needs the unit's item or repeat | `ToolInputError` goes back to the model. `ToolUnavailable` ends the episode as `tool_error`. A context tool's cached results are keyed on the item and repeat |
 | embeddings | `Embedder.identity` and `_embed` | the vector cache comes with it |
 | a vector index | `Index.identity`, `build`, `search` | set `exact = False` and the recall cost is measured |
 | a retriever | `identity` and `retrieve(queries, k, repeat=0)` | runs through the harness via `RetrieverBackend`, which passes each unit's repeat index. A deterministic retriever ignores it |
@@ -393,14 +397,36 @@ conditions = {m: GoldControl(BM25(world.docs), gold, m)
 ```
 
 Both need a base that scores every document: BM25, or dense retrieval over
-the exact index. The controls look the gold documents up by the query
-text, so they apply when the query is the item's own question, not to the
-searches an agent writes itself.
+the exact index. `GoldControl` looks the gold documents up by the query
+text, so it applies when the query is the item's own question. For the
+searches an agent writes itself, `gold_search_tool(base, gold_by_item(items),
+docs, mode)` looks them up by the unit's item instead. In a config this is
+`"search": {"control": mode}`.
 
 FAISS (`pip install -e ".[retrieval]"`) and torch cannot share a process
 when both come from pip wheels on macOS: each bundles its own OpenMP
 runtime, and the process aborts. `FaissIndex` detects this and raises with
 the remedy.
+
+## Judges
+
+A judge is a second run over a finished run's answers, so it has the same
+cache, resume and attrition. `judge_items(frame, task)` turns each answer
+into an item in its source item's cluster. `judge_task(items, criteria)`
+asks for one call to a `verdict` tool with a boolean per criterion, and
+`run_panel` runs it once per judge. A reply that is not one well-formed
+call is `unparsed`, never a fail. Set `"tool_choice": "verdict"` in a
+judge's params to force the call where the provider allows it (Claude
+Sonnet 5.5 rejects forced tool use).
+
+`evaluation.judges` compares the verdicts with an exact reference. For
+each judge it gives the false-positive rate α and the false-negative rate
+β, and the debiased rate θ = (m − α)/(1 − α − β) with its delta-method
+variance. Between judges it gives Cohen's κ, McNemar on the discordant
+pairs, the correlation ρ of their errors and the panel's effective number
+of judges n/(1 + (n − 1)ρ̄). `tasks.judge_calibration` writes answers whose
+correctness is known by construction (hedges, self-corrections, near-name
+distractors) to measure judges on.
 
 ## Outputs
 
