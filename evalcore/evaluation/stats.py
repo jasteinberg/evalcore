@@ -114,12 +114,24 @@ def _bca_bounds(theta: float, reps: np.ndarray, jack: np.ndarray,
                 alpha: float) -> tuple[float, float]:
     """Bias-corrected and accelerated percentile bounds (Efron 1987).
 
-    z0 corrects median bias:      z0 = Phi^{-1}( #{theta* < theta} / B ).
+    z0 corrects median bias:
+        z0 = Phi^{-1}( [#{theta* < theta} + #{theta* = theta}/2] / B ).
     a  corrects skew, from the leave-one-CLUSTER-out jackknife values
     theta_(i):   a = sum (jbar - theta_(i))^3 / (6 [sum (jbar - theta_(i))^2]^{3/2}).
+
+    Ties count half.  Efron's z0 is the median-bias of a continuous
+    bootstrap distribution, where ties have probability zero.  A cluster
+    mean of a 0/1 metric is discrete: with [1]*5 + [0]*5 the replicate
+    equals theta = 0.5 with probability C(10,5)/2^10 = 0.25, and counting
+    only the strict "<" gives a fraction near 0.38, z0 = -0.31, and both
+    bounds pulled down ([0.1, 0.7] around 0.5).  Continuous data ties too:
+    a resample that is a permutation of all k clusters (probability
+    k!/k^k, 0.22 at k = 3) has mean theta up to summation order, so ties
+    are judged within a relative 1e-12, not by float equality.
     """
     B = reps.size
-    prop = float(np.mean(reps < theta))
+    tie = np.isclose(reps, theta, rtol=1e-12, atol=1e-12 * max(1.0, abs(theta)))
+    prop = float(np.mean((reps < theta) & ~tie) + 0.5 * np.mean(tie))
     prop = min(max(prop, 1.0 / (2 * B)), 1.0 - 1.0 / (2 * B))
     z0 = sps.norm.ppf(prop)
     d = jack.mean() - jack
@@ -452,10 +464,12 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
 
 
 # Coverage of a nominal 95% cluster-bootstrap interval against the true
-# mean, by number of clusters k (BCa, 400 simulated datasets per k, each
-# of k clusters of 6 rows at rho = 0.6, binomial SE of each figure ~0.011).
-# Measured 5 Oct 2026.  The percentile method is within 0.03 throughout.
-SMALL_K_COVERAGE = {3: 0.68, 5: 0.83, 10: 0.88, 20: 0.93, 30: 0.95}
+# mean, by number of clusters k (BCa with ties counted half, B = 2000, 400
+# simulated datasets per k, each of k clusters of 6 Gaussian rows at
+# rho = 0.6; binomial SE of each figure 0.011 at 0.95, 0.023 at 0.69).
+# Measured 10 Nov 2026 (5 Oct, before the tie fix: 0.68, 0.83, 0.88, 0.93,
+# 0.95).  The percentile method is within 0.03 throughout.
+SMALL_K_COVERAGE = {3: 0.69, 5: 0.84, 10: 0.90, 20: 0.93, 30: 0.95}
 MIN_CLUSTERS = 20
 MAX_EXCLUDED_SHARE = 0.10
 

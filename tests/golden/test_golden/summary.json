@@ -19,8 +19,8 @@
   [
    "strong",
    0.6666666666666666,
-   0.25,
-   0.8333333333333334,
+   0.3333333333333333,
+   0.9166666666666666,
    0.13685544297302596,
    12,
    24,
@@ -30,13 +30,13 @@
    1.0,
    2.0,
    12.0,
-   "only 12 clusters: the interval is too narrow (a nominal 95% interval covers ~88% at k=10)"
+   "only 12 clusters: the interval is too narrow (a nominal 95% interval covers ~90% at k=10)"
   ],
   [
    "weak",
    0.5,
-   0.16666666666666666,
-   0.6666666666666666,
+   0.25,
+   0.75,
    0.14401296585986986,
    12,
    24,
@@ -46,7 +46,7 @@
    1.0,
    2.0,
    12.0,
-   "only 12 clusters: the interval is too narrow (a nominal 95% interval covers ~88% at k=10)"
+   "only 12 clusters: the interval is too narrow (a nominal 95% interval covers ~90% at k=10)"
   ]
  ]
 }

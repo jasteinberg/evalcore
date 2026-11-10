@@ -261,7 +261,7 @@ def test_few_clusters_are_flagged_with_the_measured_undercoverage():
     with pytest.warns(RuntimeWarning, match="1 of 1 cells carry caveats"):
         s = summarize(frame_of(3), "y", ["condition"], n_boot=200)
     assert "only 3 clusters" in s.iloc[0]["caveats"]
-    assert "covers ~68% at k=3" in s.iloc[0]["caveats"]
+    assert "covers ~69% at k=3" in s.iloc[0]["caveats"]
 
 
 def test_a_well_resolved_cell_has_no_caveats_and_no_warning(recwarn):
@@ -605,3 +605,34 @@ def test_c35_summarize_keeps_a_cell_with_a_missing_key():
     assert len(out) == 2
     miss = out[out["condition"].isna()]
     assert len(miss) == 1 and miss["point"].iloc[0] == 2.0
+
+
+# --- BCa with ties: a 0/1 metric ----------------------------------------------
+
+def test_bca_on_symmetric_binary_clusters_is_symmetric():
+    """[1]*5 + [0]*5, one row per cluster.  A replicate mean is X/10 with
+    X ~ Bin(10, 1/2): P(X <= 1) = 11/1024 = 1.1% and P(X <= 2) = 56/1024 =
+    5.5%, so the 2.5% quantile is 0.2 and, by symmetry, the 97.5% one 0.8.
+    With ties counted half z0 ~ 0 and a = 0 (the jackknife values are
+    symmetric), so BCa is that interval.  Counting only the strict "<"
+    gave [0.1, 0.7]."""
+    df = pd.DataFrame({"cluster": range(10), "y": [1.0] * 5 + [0.0] * 5})
+    r = cluster_bootstrap(df, "y", n_boot=20_000, seed=0, method="bca")
+    assert (r.lo, r.hi) == pytest.approx((0.2, 0.8))
+
+
+def test_bca_misses_a_binary_mean_equally_often_on_each_side():
+    """Bernoulli(1/2), one 0/1 value per cluster, k = 20, R = 400.  By the
+    symmetry of the problem the interval lies wholly below 1/2 as often as
+    wholly above it.  Each rate is ~1.3% (SE ~0.6%), so the SE of their
+    difference is ~0.8%; the band is 3 SE.  The strict-"<" z0 gave 4.5%
+    below against 0.17% above."""
+    R, below, above = 400, 0, 0
+    for s in range(R):
+        rng = np.random.default_rng(80_000 + s)
+        df = pd.DataFrame({"cluster": range(20),
+                           "y": (rng.random(20) < 0.5).astype(float)})
+        r = cluster_bootstrap(df, "y", n_boot=1000, seed=s, method="bca")
+        below += r.hi < 0.5
+        above += r.lo > 0.5
+    assert abs(below - above) / R < 0.025, (below, above)
