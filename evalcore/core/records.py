@@ -61,9 +61,12 @@ class SinkState:
     before request keys existed) and whether that row errored, last-wins
     as in `to_frame`, plus how many lines could not be read."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, keep_rows: bool = False) -> None:
         self.seen: dict[str, str | None] = {}
         self.errored: set[str] = set()
+        # each unit's last row, for a re-score (only when asked: memory)
+        self.rows: dict[str, Mapping[str, Any]] = {}
+        self.keep_rows = keep_rows
         rows, self.unreadable = (read_jsonl(path) if Path(path).exists()
                                  else ([], 0))
         for row in rows:
@@ -75,6 +78,8 @@ class SinkState:
     def note(self, row: Mapping[str, Any]) -> None:
         uid = row["unit_id"]
         self.seen[uid] = row.get("request_key")
+        if self.keep_rows:
+            self.rows[uid] = row
         if row.get("error"):
             self.errored.add(uid)
         else:

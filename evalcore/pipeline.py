@@ -156,7 +156,7 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     from all the shard sinks), so n shards cannot spend n times it."""
     o = exp.options
     p = plan(exp.planned(), exp.backend, exp.task.render, exp.out, o.resume,
-             o.retry_errors)
+             o.retry_errors, score_version=exp.task.version)
     cache = exp.cache()
 
     def calls(q: Plan) -> int:
@@ -167,6 +167,7 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     d: dict[str, Any] = {"units": len(p.units), "done": p.done,
                          "to_go": len(p.todo), "cached": cached,
                          "to_call": to_call, "stale": p.stale,
+                         "rescore": len(p.rescore),
                          "retried": p.retried}
     budget_calls, scope = to_call, ""
     if exp.shard is not None:
@@ -214,7 +215,8 @@ def execute_stage(exp: Experiment, res: Results) -> None:
         workers=s.get("workers") or o.workers or 8,
         batch_size=s.get("batch_size") or o.batch_size or 1,
         attempts=o.attempts, resume=o.resume, retry_errors=o.retry_errors,
-        limit=o.limit, events=o.events, shard=exp.shard)
+        limit=o.limit, events=o.events, shard=exp.shard,
+        score_version=exp.task.version)
 
 
 def analyse_stage(exp: Experiment, res: Results) -> None:

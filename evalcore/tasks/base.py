@@ -28,8 +28,10 @@ class Task:
     as cell TAGS -- tags carry no identity, so naming or re-versioning a
     task never invalidates the cache.  Changing what a task asks changes the
     rendered requests, and resume re-runs exactly those units on its own
-    (the request key covers them).  Bump `version` when the scoring changes,
-    so frames from before and after can be told apart."""
+    (the request key covers them).  Bump `version` when the scoring
+    changes: `run` (and the pipeline) pass it to `execute` as
+    `score_version`, so rows scored under the old version are re-scored
+    from their stored responses, with no model call."""
 
     name: str
     items: Sequence[Item]
@@ -56,5 +58,6 @@ class Task:
             repeats: int = 1, **kw: Any) -> pd.DataFrame:
         """`runner.execute` over this task's units.  Keyword arguments pass
         through (cache, workers, batch_size, resume, ...)."""
+        kw.setdefault("score_version", self.version)
         return execute(self.units(cells, repeats), backend, self.render,
-                   self.score, out, **kw)
+                       self.score, out, **kw)

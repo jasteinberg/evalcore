@@ -17,7 +17,11 @@ Design commitments, each of which is a lesson rather than a preference:
   but the attrition is written down, because silent dropping is how an
   eval acquires a bias nobody can see afterwards.
 * Scoring is separated from generation.  `score` runs on the response, so
-  changing a metric costs a re-score over cached responses, not a re-run.
+  changing a metric costs a re-score, not a re-run.  Pass `score_version`
+  (the pipeline and `Task.run` pass `Task.version`): every row records the
+  version that scored it, and a finished row scored under another version
+  is re-scored from its stored text and meta, with no model call and no
+  cache needed.  The new row supersedes the old.
 * Every row has a `status`: ok, error, truncated or unparsed.  Only `ok`
   rows carry metrics.  A truncated response (the generation hit its token
   budget) is not scored, because a cut-off answer is not an answer.  A
@@ -47,7 +51,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -89,7 +93,8 @@ Score = Callable[[Unit, Response], dict[str, Any]]
 # came from.  Refused by `plan`, before any call.
 RUNNER_COLUMNS = frozenset({
     "cell_id", "item_id", "cluster", "group", "repeat", "unit_id", "text",
-    "error", "cached", "request_key", "status", "parse_error"})
+    "error", "cached", "request_key", "status", "parse_error",
+    "score_version"})
 
 
 class ParseFailure(ValueError):
@@ -113,9 +118,14 @@ class Plan:
     stale: int = 0        # finished, but from a different request: redo
     retried: int = 0      # last row was an error: try again
     unreadable: int = 0   # sink lines a crash cut short
+    # finished under another score_version: re-scored from the row, no call
+    rescore: list[Unit] = field(default_factory=list)
+    rows: dict[str, Mapping[str, Any]] = field(default_factory=dict,
+                                               repr=False)
 
     @property
     def done(self) -> int:
+        """Units needing no model call (rescores included)."""
         return len(self.units) - len(self.todo)
 
 
@@ -136,7 +146,7 @@ def rendered(render: Render, u: Unit) -> Request:
 
 def plan(units: Iterable[Unit], backend: Backend, render: Render,
          out: str | Path, resume: bool = True, retry_errors: bool = True,
-         limit: int | None = None) -> Plan:
+         limit: int | None = None, score_version: str | None = None) -> Plan:
     """Decide what an invocation must run.
 
     A unit counts as done only if its last row is a result: one whose
@@ -146,12 +156,16 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     again unless `retry_errors=False` (for a deterministic refusal that
     would only fail again at a cost).  A changed prompt, item, backend or
     backend default changes the request_key, so the unit is redone and the
-    new row supersedes the old."""
+    new row supersedes the old.
+
+    With `score_version` given, a unit that is done but whose last row was
+    scored under another version (or none) goes to `rescore`: its response
+    is read back from the row and scored again, without a call."""
     units = list(units)[:limit]
     _refuse_clashes(units)
     keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
             for u in units}
-    state = SinkState(out)
+    state = SinkState(out, keep_rows=score_version is not None)
     p = Plan(units, keys, [], unreadable=state.unreadable)
     for u in units:
         if not resume or u.id not in state.seen:
@@ -162,6 +176,10 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
         elif state.seen[u.id] != keys[u.id]:    # incl. a row with no key
             p.stale += 1
             p.todo.append(u)
+        elif (score_version is not None and u.id not in state.errored
+              and state.rows[u.id].get("score_version") != score_version):
+            p.rescore.append(u)
+            p.rows[u.id] = state.rows[u.id]
     return p
 
 
@@ -206,6 +224,9 @@ def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
     if p.retried:
         say(f"{p.retried} units errored last time. Retrying them "
             f"(retry_errors=False keeps error rows as final)")
+    if p.rescore:
+        say(f"{len(p.rescore)} finished units were scored under another "
+            f"score_version. Re-scoring them from their rows, no calls")
     say(f"{len(p.units)} units, {p.done} already done, {len(p.todo)} to go")
 
 
@@ -233,6 +254,7 @@ class _Context:
     n: int = 0
     errors: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    score_version: str | None = None
 
     def emit(self, event: str, **fields: Any) -> None:
         if self.events is not None:
@@ -330,12 +352,15 @@ def _sidecar(ctx: _Context, rkey: str) -> str:
     return os.path.relpath(f, ctx.out.parent)
 
 
-def _row(u: Unit, rkey: str, rp: Response, score: Score) -> dict[str, Any]:
+def _row(u: Unit, rkey: str, rp: Response, score: Score,
+         score_version: str | None = None) -> dict[str, Any]:
     """The result row: identity columns, the response, a status, and the
     scores -- which only an `ok` response gets."""
     meta = rp.meta or {}
     row = {**u.row(), "text": rp.text, "error": rp.error, "cached": rp.cached,
            "request_key": rkey, **{f"meta_{k}": v for k, v in meta.items()}}
+    if score_version is not None:
+        row["score_version"] = score_version
     if not rp.ok:
         # a tool's infrastructure failing is not the model failing
         row["status"] = "tool_error" if meta.get("tool_error") else "error"
@@ -361,11 +386,19 @@ def _row(u: Unit, rkey: str, rp: Response, score: Score) -> dict[str, Any]:
     return row
 
 
+def _response_of(row: Mapping[str, Any]) -> Response:
+    """The response a row was made from, read back for a re-score: its
+    text, error, cached flag and meta (the `meta_` columns)."""
+    return Response(row["unit_id"], row.get("text"),
+                    {k[5:]: v for k, v in row.items() if k.startswith("meta_")},
+                    row.get("error"), cached=bool(row.get("cached")))
+
+
 def _batch(ctx: _Context, batch: Sequence[Unit]) -> None:
     rkeys = [ctx.keys[u.id] for u in batch]
     resps = _call(ctx, [rendered(ctx.render, u) for u in batch], rkeys)
     for u, rk, rp in zip(batch, rkeys, resps, strict=True):
-        row = _row(u, rk, rp, ctx.score)
+        row = _row(u, rk, rp, ctx.score, ctx.score_version)
         ctx.sink.write(row)
         meta = rp.meta or {}
         ctx.emit("unit", unit_id=u.id, status=row["status"], cached=rp.cached,
@@ -384,6 +417,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         log_every: int = 25, events: bool = True,
         manifest: str | Path | bool = True,
         shard: tuple[int, int] | None = None,
+        score_version: str | None = None,
         stream: TextIO = sys.stderr) -> pd.DataFrame:
     """Execute `units`, writing one row per unit to `out` (JSONL), and
     return the frame.
@@ -403,6 +437,9 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     shard its own `out` (`shard_path`), and merge with `merge_shards`.  The
     manifest still records the whole plan, so a shard that never started
     is counted missing.
+
+    `score_version` names the scorer: rows record it, and a finished row
+    scored under another one is re-scored without a call (see `plan`).
     """
     backend.identity()                    # refuse before touching any file
     out = Path(out)
@@ -412,7 +449,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         si, sn = check_shard(shard)
         mine = lambda uid: shard_of(uid, sn) == si    # noqa: E731
     p = plan([u for u in everything if mine(u.id)], backend, render, out,
-             resume, retry_errors)
+             resume, retry_errors, score_version=score_version)
     mpath = (None if manifest is False or manifest is None
              else manifest_path(out) if manifest is True else Path(manifest))
     if mpath is not None:
@@ -425,11 +462,17 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         ArrayStore(cache.root / "arrays" if cache and cache.enabled
                    else Path(str(out) + ".arrays")),
         cache, EventLog(events_path(out)) if events else None,
-        attempts, batch_size, len(p.todo), log_every, stream)
+        attempts, batch_size, len(p.todo), log_every, stream,
+        score_version=score_version)
     ctx.emit("run_start", n_units=len(p.units), to_go=len(p.todo), done=p.done,
              stale=p.stale, retried=p.retried, workers=workers,
              batch_size=batch_size, backend=type(backend).__name__,
              identity=digest(backend.identity()), out=str(out))
+    for u in p.rescore:                   # no call: score the stored response
+        row = _row(u, p.keys[u.id], _response_of(p.rows[u.id]), score,
+                   score_version)
+        ctx.sink.write(row)
+        ctx.emit("rescore", unit_id=u.id, status=row["status"])
     batches = [p.todo[i:i + max(1, batch_size)]
                for i in range(0, len(p.todo), max(1, batch_size))]
     try:
