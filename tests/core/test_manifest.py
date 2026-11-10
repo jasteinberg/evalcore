@@ -15,6 +15,7 @@ and that the blind table is the one that cannot see it.
 """
 
 import io
+import os
 
 import pandas as pd
 import pytest
@@ -164,8 +165,10 @@ def test_missing_or_corrupt_manifest_degrades_to_prior_behaviour(tmp_path):
     mp = manifest_path(out)
     keep = mp.read_text().splitlines()[:6]
     mp.write_text("\n".join(keep) + '\n{"unit_id": "trunc')
-    assert len(read_manifest(mp)) == 6
-    partial = attrition(df, ["model"], manifest=mp)
+    with pytest.warns(RuntimeWarning, match="1 manifest line"):
+        assert len(read_manifest(mp)) == 6
+    with pytest.warns(RuntimeWarning, match="1 manifest line"):
+        partial = attrition(df, ["model"], manifest=mp)
     assert partial["n_planned"].sum() == 6
 
 
@@ -247,8 +250,33 @@ def test_manifest_append_after_a_truncated_line_keeps_every_unit(tmp_path):
     write_manifest(us[:3], mp)
     keep = mp.read_text().splitlines()
     mp.write_text("\n".join(keep[:2]) + "\n" + keep[2][:30])     # crash
-    write_manifest(us, mp)
-    assert set(read_manifest(mp)["unit_id"]) == {u.id for u in us}
+    with pytest.warns(RuntimeWarning, match="1 manifest line"):
+        write_manifest(us, mp)
+    with pytest.warns(RuntimeWarning, match="1 manifest line"):
+        assert set(read_manifest(mp)["unit_id"]) == {u.id for u in us}
+
+
+def test_each_manifest_record_is_one_write(tmp_path, monkeypatch):
+    """The concurrency guarantee in mechanism form, so it does not depend on
+    a race showing up: every record reaches the OS as exactly one write of
+    one whole, newline-terminated line.  A buffered writer (the previous
+    implementation) flushes in chunks that need not align with records."""
+    import json
+
+    import evalcore.core.records as records_mod
+    payloads: list[bytes] = []
+    real = os.write
+
+    def spy(fd, data):
+        payloads.append(bytes(data))
+        return real(fd, data)
+    monkeypatch.setattr(records_mod.os, "write", spy)
+    us = list(units(grid({"model": ["m1", "m2"]}), items(60)))
+    write_manifest(us, tmp_path / "p.manifest.jsonl")
+    assert len(payloads) == len(us) == 120
+    for data in payloads:
+        assert data.endswith(b"\n") and data.count(b"\n") == 1
+        assert json.loads(data)["unit_id"]
 
 
 def test_manifest_can_be_disabled_and_run_is_unchanged(tmp_path):
@@ -355,3 +383,27 @@ def test_manifest_path_does_not_collide_across_sinks(tmp_path):
     assert a != b
     assert a.parent == (tmp_path / "runs.jsonl").parent
     assert a.name.startswith("runs.jsonl")
+
+
+def test_sink_records_are_one_write_each_and_close_is_idempotent(tmp_path,
+                                                                  monkeypatch):
+    """The run sink and the event log append through the same one-write path
+    as the manifest (see test_each_manifest_record_is_one_write)."""
+    import json
+
+    import evalcore.core.records as records_mod
+    payloads: list[bytes] = []
+    real = os.write
+
+    def spy(fd, data):
+        payloads.append(bytes(data))
+        return real(fd, data)
+    monkeypatch.setattr(records_mod.os, "write", spy)
+    log = records_mod.AppendLog(tmp_path / "log.jsonl")
+    recs = [{"unit_id": f"u{i}", "x": "y" * (i * 500)} for i in range(30)]
+    for r in recs:
+        log.write(r)
+    log.close()
+    log.close()                                   # second close is a no-op
+    assert [json.loads(p) for p in payloads] == recs
+    assert all(p.count(b"\n") == 1 and p.endswith(b"\n") for p in payloads)

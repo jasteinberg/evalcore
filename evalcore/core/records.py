@@ -16,7 +16,7 @@ import os
 import threading
 import uuid
 import warnings
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -81,29 +81,55 @@ class SinkState:
             self.errored.discard(uid)
 
 
+def _open_append(path: Path) -> int:
+    return os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+
+
+def _write_line(fd: int, rec: Mapping[str, Any], path: Path,
+                default: Callable[[Any], Any]) -> None:
+    """Append one record as ONE write(2) on an O_APPEND descriptor.
+
+    O_APPEND makes each write land at the current end of the file, and a
+    single write to a local regular file is not interleaved with another
+    process's.  A buffered file object gives neither guarantee per record.
+    It flushes in fixed-size chunks, so a record can straddle two writes and
+    a concurrent writer's record can land between its halves (a torn line,
+    dropped on read).  Between two of these writes the file always ends in a
+    newline, so `_terminate_partial_line` in another writer cannot mistake a
+    live writer's record for a crash fragment.  The bytes reach the OS when
+    the call returns, as a flush would.  A short write raises."""
+    data = (json.dumps(rec, default=default) + "\n").encode()
+    n = os.write(fd, data)
+    if n != len(data):
+        raise OSError(f"short write to {path}: {n} of {len(data)} bytes")
+
+
 class AppendLog:
-    """Thread-safe append-only JSONL writer, flushed per record.  A fragment
-    a kill left mid-write is terminated before the first append, so the
-    next record is not glued onto it and lost."""
+    """Thread-safe append-only JSONL writer, one write(2) per record
+    (`_write_line`).  A fragment a kill left mid-write is terminated before
+    the first append, so the next record is not glued onto it and lost."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         _terminate_partial_line(self.path)
-        self.fh = self.path.open("a")
+        self.fd = _open_append(self.path)
 
     def write(self, rec: Mapping[str, Any]) -> None:
         with self.lock:
-            self.fh.write(json.dumps(rec, default=json_default) + "\n")
-            self.fh.flush()
+            _write_line(self.fd, rec, self.path, json_default)
             self._written(rec)
 
     def _written(self, rec: Mapping[str, Any]) -> None:
         """Called under the lock after each record is on disk."""
 
     def close(self) -> None:
-        self.fh.close()
+        """Idempotent: a raw descriptor closed twice could close whatever
+        file has since been given the same number."""
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
 
 
 class JsonlSink(SinkState, AppendLog):
@@ -197,12 +223,20 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
             if u.id not in have:
                 have.add(u.id)
                 fresh.append(u.row())
-        with path.open("a") as fh:        # O_APPEND: additive across processes
-            for rec in fresh:
-                fh.write(json.dumps(rec, default=str) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+        _append_records(path, fresh)
     return path
+
+
+def _append_records(path: Path, recs: Sequence[Mapping[str, Any]]) -> None:
+    """The manifest's records, each one `_write_line`, then fsync: the plan
+    must be on disk before the first call."""
+    fd = _open_append(path)
+    try:
+        for rec in recs:
+            _write_line(fd, rec, path, str)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def read_jsonl(path: str | Path) -> tuple[list[Any], int]:
@@ -224,11 +258,17 @@ def read_jsonl(path: str | Path) -> tuple[list[Any], int]:
 def _read_records(path: str | Path) -> list[dict]:
     """Tolerant line reader: a truncated or corrupt manifest degrades to the
     records that do parse.  It is a record of intent, and a partial record of
-    intent is still better than none."""
+    intent is still better than none.  Lines that do not parse are counted
+    in a RuntimeWarning, not dropped silently: each is a planned unit the
+    attrition table can no longer report as missing."""
     if not Path(path).exists():
         return []
-    return [r for r in read_jsonl(path)[0]
-            if isinstance(r, dict) and "unit_id" in r]
+    rows, bad = read_jsonl(path)
+    if bad:
+        warnings.warn(f"{path}: {bad} manifest line(s) did not parse and are "
+                      f"left out of the plan (usually a write cut off by a "
+                      f"crash)", RuntimeWarning, stacklevel=2)
+    return [r for r in rows if isinstance(r, dict) and "unit_id" in r]
 
 
 def read_manifest(path: str | Path) -> pd.DataFrame:
