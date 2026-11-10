@@ -1,5 +1,5 @@
 """Gold controls: the oracle and gold-removed conditions against rankings written
-out by hand from their definitions (search.py, "Controls."), the refusals,
+out by hand from their definitions (search/controls.py), the refusals,
 and both conditions run and scored through the ordinary runner."""
 
 from __future__ import annotations

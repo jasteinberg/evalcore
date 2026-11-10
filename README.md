@@ -168,7 +168,7 @@ locally.
 | `agent.py`, `tools.py` | `AgentBackend` (the multi-turn tool loop), `Tool` |
 | `hooks.py` | `hooked`: forward hooks that must match, are counted, and are always removed |
 | `embed.py` | `Embedder` (function, HF, OpenAI, Gemini) and the per-text vector cache |
-| `search.py` | `BM25`, `ExactIndex`, `FaissIndex`, `DenseRetriever`, `Reranker`, `SampledRetriever`, `GoldControl`, `CorpusSearch`, `RetrieverBackend` |
+| `search/` | `BM25`, `ExactIndex`, `FaissIndex`, `DenseRetriever`, `Reranker`, `SampledRetriever`, `GoldControl`, `CorpusSearch`, `RetrieverBackend` |
 
 **`tasks/`: what is asked and how it is scored**
 
