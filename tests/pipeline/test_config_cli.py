@@ -368,3 +368,51 @@ def test_the_search_section_chooses_the_agent_tool(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="no corpus to search"):
         from_config({**cfg(tmp_path), "search": {"retriever": {"type": "bm25"},
                                                  "k": 3}})
+
+
+def test_a_sampled_retriever_from_config(tmp_path):
+    """beta is required and may be "inf" (JSON has no infinity).  At inf the
+    draw is the base ranking, so the run's recall@3 equals plain BM25's (1 on
+    the one-hop questions, as in test_a_retriever_is_evaluated_from_config)."""
+    from evalcore.core.search import SampledRetriever
+    sampled = {"type": "sampled", "base": {"type": "bm25"}, "beta": "inf",
+               "seed": 0}
+    exp = from_config(retrieval_cfg(tmp_path, sampled))
+    r = exp.backend.retriever
+    assert isinstance(r, SampledRetriever) and r.beta == float("inf")
+    assert r.identity()["beta"] == "inf"
+    one_hop = exp.run().frame
+    one_hop = one_hop[one_hop["group"] == "pop"]
+    assert (one_hop["recall@3"] == 1.0).all()
+
+
+@pytest.mark.parametrize("bad,where", [
+    ({"type": "sampled", "base": {"type": "bm25"}, "beta": "infinity",
+      "seed": 0}, 'a number or "inf"'),
+    ({"type": "sampled", "base": {"type": "bm25"}, "beta": 1.0},
+     r"requires \['seed'\]"),
+    ({"type": "sampled", "base": {"type": "sampled", "base": {"type": "bm25"},
+                                  "beta": 1.0, "seed": 0},
+      "beta": 1.0, "seed": 0}, "cannot give every document's score"),
+])
+def test_sampled_retriever_config_mistakes_are_named(tmp_path, bad, where):
+    with pytest.raises(ConfigError, match=where):
+        from_config(retrieval_cfg(tmp_path, bad))
+
+
+def test_the_search_section_builds_gold_controls(tmp_path, monkeypatch):
+    pytest.importorskip("httpx")              # an http backend is built
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    base = cfg(tmp_path, task={"type": "search_qa", "n_towns": 4},
+               backend={"type": "http", "flavour": "anthropic",
+                        "default_params": {"model": "m", "max_tokens": 8}})
+    search = {"retriever": {"type": "bm25"}, "k": 3}
+    plain = from_config({**base, "search": search}).backend
+    oracle = from_config({**base, "search": {**search, "control": "oracle"}}
+                         ).backend
+    assert not plain.tools["search"].uses_context and not plain.uses_context
+    assert oracle.tools["search"].uses_context and oracle.uses_context
+    assert oracle.tools["search"].version.startswith("gold-oracle-")
+    assert oracle.tools["search"].spec() == plain.tools["search"].spec()
+    with pytest.raises(ConfigError, match=r"search\.control: mode must be"):
+        from_config({**base, "search": {**search, "control": "both"}})

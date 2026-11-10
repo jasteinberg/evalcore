@@ -27,7 +27,7 @@ name with its keys.  The built-ins:
   score     graded (the items' graders, the default), ranked (ks),
             teacher_forced
   retriever bm25, dense (embedder, index, cache_dir), rerank (first,
-            pair_scorer, depth)
+            pair_scorer, depth), sampled (base, beta, seed)
   embedder  http (flavour, model, dimensions), hf (model, pooling, ...)
   index     exact, faiss
   pair_scorer  hf (a cross-encoder)
@@ -46,7 +46,9 @@ Top-level keys:
   agent                          {"max_turns", "max_tool_calls"}, used when
                                  the task brings tools
   search                         {"retriever": R, "k": 3}: the agent's
-                                 search tool over the task's corpus
+                                 search tool over the task's corpus.  With
+                                 "control": "none" | "oracle" | "removed",
+                                 the gold controls instead (gold_search_tool)
   options                        RunOptions fields
   stages                         {stage: false} switches a stage off,
                                  and {stage: spec} replaces it with a
@@ -68,7 +70,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import analyses as an
 from .core.agent import AgentBackend
@@ -86,6 +88,10 @@ from .core.search import (
     Reranker,
     Retriever,
     RetrieverBackend,
+    SampledRetriever,
+    ScoredRetriever,
+    gold_by_item,
+    gold_search_tool,
 )
 from .core.spec import grid
 from .core.tools import Tool
@@ -257,6 +263,31 @@ def _dense(embedder: Mapping[str, Any], index: Mapping[str, Any] | None = None,
                           min_ann_recall=min_ann_recall)
 
 
+def _require_scored(r: Retriever, where: str) -> ScoredRetriever:
+    """`r` if it can give every document's score (BM25, or dense retrieval
+    over the exact index), refused here otherwise rather than as error rows
+    mid-run."""
+    exact = not isinstance(r, DenseRetriever) or (
+        isinstance(r.index, ExactIndex) and r.index.exact)
+    if not hasattr(r, "score_all") or not exact:
+        raise ConfigError(f"{where}: this retriever cannot give every "
+                          f"document's score (use bm25, or dense with the "
+                          f"exact index)")
+    return cast(ScoredRetriever, r)       # checked just above
+
+
+@register("retriever", "sampled")
+def _sampled(base: Mapping[str, Any], beta: float | str, seed: int, *,
+             docs: Mapping[str, str]) -> Retriever:
+    """k documents drawn with probability proportional to exp(beta s).  JSON
+    has no infinity, so beta = inf is written "inf"."""
+    if isinstance(beta, str) and beta != "inf":
+        raise ConfigError(f'retriever.beta: a number or "inf", got {beta!r}')
+    b = _require_scored(build("retriever", base, "retriever.base", docs=docs),
+                        "retriever.base")
+    return SampledRetriever(b, float(beta), seed)
+
+
 @register("retriever", "rerank")
 def _rerank(first: Mapping[str, Any], pair_scorer: Mapping[str, Any],
             depth: int, *, docs: Mapping[str, str]) -> Retriever:
@@ -398,12 +429,27 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
                           "retriever")
     if "search" in cfg:
         search = dict(cfg["search"])
-        _check(search, {"retriever", "k"}, "search", required=("retriever", "k"))
+        _check(search, {"retriever", "k", "control"}, "search",
+               required=("retriever", "k"))
         if ts.docs is None or not tools:
             raise ConfigError("search: this task has no corpus to search")
-        tools = [CorpusSearch(ts.docs, build("retriever", search["retriever"],
-                                             "search.retriever", docs=ts.docs),
-                              k=search["k"]).tool]
+        r = build("retriever", search["retriever"], "search.retriever",
+                  docs=ts.docs)
+        if "control" in search:
+            missing = [it.item_id for it in task.items
+                       if "gold_docs" not in it.payload]
+            if missing:
+                raise ConfigError(f"search.control: {len(missing)} item(s) have "
+                                  f"no 'gold_docs' (e.g. {missing[0]!r})")
+            scored = _require_scored(r, "search.retriever")
+            try:
+                tools = [gold_search_tool(scored, gold_by_item(task.items),
+                                          ts.docs, search["control"],
+                                          k=search["k"])]
+            except ValueError as exc:       # a bad mode or k, duplicate items
+                raise ConfigError(f"search.control: {exc}") from exc
+        else:
+            tools = [CorpusSearch(ts.docs, r, k=search["k"]).tool]
     if tools:
         agent = dict(cfg.get("agent", {}))
         _check(agent, {"max_turns", "max_tool_calls"}, "agent")
