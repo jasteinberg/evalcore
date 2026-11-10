@@ -141,6 +141,67 @@ def test_anthropic_request_shape():
          "content": "error: bad query", "is_error": True}]}
 
 
+VERDICT = {"name": "verdict", "description": "Record the verdict.",
+           "parameters": {"type": "object",
+                          "properties": {"pass": {"type": "boolean"}},
+                          "required": ["pass"]}}
+
+
+@pytest.mark.parametrize("adapter,field,want", [
+    (_anthropic_adapter, "tool_choice", {"type": "tool", "name": "verdict"}),
+    (_openai_adapter, "tool_choice",
+     {"type": "function", "function": {"name": "verdict"}}),
+    (_gemini_adapter, "toolConfig",
+     {"functionCallingConfig": {"mode": "ANY",
+                                "allowedFunctionNames": ["verdict"]}}),
+])
+def test_tool_choice_forces_the_named_tool_in_each_providers_form(
+        adapter, field, want):
+    """Each provider's documented way to require one named function."""
+    _, body = adapter("m", Q, {"max_tokens": 8, "tool_choice": "verdict"},
+                      [SPEC, VERDICT])
+    assert body[field] == want
+    _, free = adapter("m", Q, {"max_tokens": 8}, [SPEC, VERDICT])
+    assert "tool_choice" not in free and "toolConfig" not in free
+
+
+@pytest.mark.parametrize("adapter", [_anthropic_adapter, _openai_adapter,
+                                     _gemini_adapter])
+def test_tool_choice_naming_a_tool_not_sent_is_refused(adapter):
+    with pytest.raises(Fatal, match="not one of the request's tools"):
+        adapter("m", Q, {"max_tokens": 8, "tool_choice": "verdict"}, [SPEC])
+    with pytest.raises(Fatal, match="not one of the request's tools"):
+        adapter("m", Q, {"max_tokens": 8, "tool_choice": "verdict"})
+
+
+def test_out_tokens_is_billed_output_including_thinking_on_every_provider():
+    """Anthropic's output_tokens and OpenAI's completion_tokens include
+    thinking.  Gemini reports thoughtsTokenCount apart from
+    candidatesTokenCount and bills both, so 30 + 70 = 100 there too."""
+    _, a = _anthropic_parse({"content": [], "stop_reason": "end_turn",
+                             "usage": {"input_tokens": 5, "output_tokens": 100}})
+    _, o = _openai_parse({"choices": [{"message": {}, "finish_reason": "stop"}],
+                          "usage": {"prompt_tokens": 5, "completion_tokens": 100,
+                                    "completion_tokens_details":
+                                        {"reasoning_tokens": 70}}})
+    _, g = _gemini_parse({"candidates": [{"content": {"parts": []},
+                                          "finishReason": "STOP"}],
+                          "usageMetadata": {"promptTokenCount": 5,
+                                            "candidatesTokenCount": 30,
+                                            "thoughtsTokenCount": 70}})
+    assert a["out_tokens"] == o["out_tokens"] == g["out_tokens"] == 100
+    assert o["thinking_tokens"] == g["thinking_tokens"] == 70
+
+
+def test_gemini_without_thinking_counts_the_reply_only():
+    _, g = _gemini_parse({"candidates": [{"content": {"parts": []},
+                                          "finishReason": "STOP"}],
+                          "usageMetadata": {"candidatesTokenCount": 30}})
+    assert g["out_tokens"] == 30 and g["thinking_tokens"] is None
+    _, none = _gemini_parse({"candidates": [{"content": {"parts": []}}]})
+    assert none["out_tokens"] is None
+
+
 def test_anthropic_parse_of_the_documented_example():
     js = {"id": "msg_01Aq9w938a90dw8q", "model": "m", "stop_reason": "tool_use",
           "role": "assistant", "content": [

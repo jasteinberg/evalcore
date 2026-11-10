@@ -100,13 +100,32 @@ def _gemini_id(call_id: Any) -> dict[str, Any]:
     return {} if str(call_id).startswith("gemini-") else {"id": call_id}
 
 
+def _forced_tool(params: Mapping[str, Any], tools: Sequence[ToolSpec] | None,
+                 who: str) -> str | None:
+    """The tool the model must call, from params["tool_choice"] (a tool
+    name), or None.  A forced call is how a structured answer is asked for
+    (a judge's verdict): left to the model's choice, a reply in prose
+    instead would be a parse failure on some rows only.  A name that is
+    not among the request's tools is refused, since no reply could
+    satisfy it."""
+    name = params.get("tool_choice")
+    if name is None:
+        return None
+    names = [t["name"] for t in tools or []]
+    if name not in names:
+        raise Fatal(f"{who}: tool_choice {name!r} is not one of the "
+                    f"request's tools {names}")
+    return str(name)
+
+
 # each adapter sends exactly these params.  The forwarding code below reads
 # the same sets, so the refusal and the body cannot drift apart
 ANTHROPIC_SENT = frozenset({"max_tokens", "temperature", "top_p",
-                            "stop_sequences"})
+                            "stop_sequences", "tool_choice"})
 OPENAI_SENT = frozenset({"temperature", "top_p", "seed", "logprobs",
-                         "top_logprobs", "stop", "max_tokens"})
-GEMINI_SENT = frozenset({"temperature", "top_p", "max_tokens", "stop"})
+                         "top_logprobs", "stop", "max_tokens", "tool_choice"})
+GEMINI_SENT = frozenset({"temperature", "top_p", "max_tokens", "stop",
+                         "tool_choice"})
 
 
 def _anthropic_adapter(model: str, messages: Sequence[Message],
@@ -143,7 +162,11 @@ def _anthropic_adapter(model: str, messages: Sequence[Message],
     if tools:
         body["tools"] = [{"name": t["name"], "description": t["description"],
                           "input_schema": t["parameters"]} for t in tools]
-    body |= {k: params[k] for k in sorted(ANTHROPIC_SENT - {"max_tokens"})
+    forced = _forced_tool(params, tools, "anthropic adapter")
+    if forced is not None:
+        body["tool_choice"] = {"type": "tool", "name": forced}
+    body |= {k: params[k] for k in sorted(ANTHROPIC_SENT
+                                          - {"max_tokens", "tool_choice"})
              if k in params}
     return "/v1/messages", body
 
@@ -192,7 +215,12 @@ def _openai_adapter(model: str, messages: Sequence[Message],
                                        "description": t["description"],
                                        "parameters": t["parameters"]}}
                          for t in tools]
-    body |= {k: params[k] for k in sorted(OPENAI_SENT - {"max_tokens"})
+    forced = _forced_tool(params, tools, "openai adapter")
+    if forced is not None:
+        body["tool_choice"] = {"type": "function",
+                               "function": {"name": forced}}
+    body |= {k: params[k] for k in sorted(OPENAI_SENT
+                                          - {"max_tokens", "tool_choice"})
              if k in params}
     # `max_tokens` is deprecated in Chat Completions and rejected by newer
     # models (found live, 2 Oct).  `max_completion_tokens` replaces it.  It
@@ -208,7 +236,9 @@ def _openai_parse(js: Mapping[str, Any]) -> tuple[str | None, JSONDict]:
     msg = ch.get("message", {})
     u = js.get("usage", {})
     meta = {"in_tokens": u.get("prompt_tokens"),
-            "out_tokens": u.get("completion_tokens"),
+            "out_tokens": u.get("completion_tokens"),     # reasoning included
+            "thinking_tokens": (u.get("completion_tokens_details") or {}
+                                ).get("reasoning_tokens"),
             "stop_reason": ch.get("finish_reason"),
             "truncated": ch.get("finish_reason") == "length",
             "logprobs": ch.get("logprobs")}
@@ -256,13 +286,29 @@ def _gemini_adapter(model: str, messages: Sequence[Message],
         body["tools"] = [{"functionDeclarations": [
             {"name": t["name"], "description": t["description"],
              "parameters": t["parameters"]} for t in tools]}]
-    gc = {dst: params[src] for src, dst in (
+    forced = _forced_tool(params, tools, "gemini adapter")
+    if forced is not None:
+        body["toolConfig"] = {"functionCallingConfig": {
+            "mode": "ANY", "allowedFunctionNames": [forced]}}
+    gc ={dst: params[src] for src, dst in (
         ("temperature", "temperature"), ("top_p", "topP"),
         ("max_tokens", "maxOutputTokens"), ("stop", "stopSequences"))
         if src in params}
     if gc:
         body["generationConfig"] = gc
     return f"/v1beta/models/{model}:generateContent", body
+
+
+def _gemini_out(u: Mapping[str, Any]) -> int | None:
+    """Billed output tokens.  Gemini reports thinking apart from the reply
+    (thoughtsTokenCount next to candidatesTokenCount) and bills both, while
+    Anthropic's output_tokens and OpenAI's completion_tokens already include
+    thinking.  Summing here gives out_tokens one meaning on every provider:
+    what the call's output is billed as."""
+    parts = [u.get("candidatesTokenCount"), u.get("thoughtsTokenCount")]
+    if all(x is None for x in parts):
+        return None
+    return sum(x for x in parts if x is not None)
 
 
 def _gemini_parse(js: Mapping[str, Any]) -> tuple[str, JSONDict]:
@@ -284,7 +330,8 @@ def _gemini_parse(js: Mapping[str, Any]) -> tuple[str, JSONDict]:
               "arguments": p["functionCall"].get("args", {})}
              for k, p in enumerate(parts) if "functionCall" in p]
     meta = {"in_tokens": u.get("promptTokenCount"),
-            "out_tokens": u.get("candidatesTokenCount"),
+            "out_tokens": _gemini_out(u),
+            "thinking_tokens": u.get("thoughtsTokenCount"),
             "stop_reason": cands[0].get("finishReason"),
             "truncated": cands[0].get("finishReason") == "MAX_TOKENS"}
     if calls:
