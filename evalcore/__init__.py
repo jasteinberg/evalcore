@@ -17,6 +17,7 @@ The package in three layers, each importable on its own:
                  probes), the cache, conformance checks
     runner       plan() then execute(): resume decisions, retries, rows, status
     records      the append-only sink, plan manifest, array sidecars
+    shards       split a sweep across processes (SLURM arrays), merge
     events       the run's event log: read, summarise, parse foreign logs
     calibrate    measure a backend, derive workers / batch size
     agent, tools multi-turn tool use
@@ -95,6 +96,7 @@ from .core.search import (
     ann_recall,
     search_tool,
 )
+from .core.shards import merge_shards, shard_from_env, shard_path
 from .core.spec import Cell, Item, Unit, canonical, digest, grid, units
 from .core.tools import Tool, ToolContext, ToolInputError, ToolUnavailable
 from .evaluation.attrition import attrition
@@ -161,7 +163,7 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     # running and records
     "plan", "execute", "ParseFailure", "calibrate", "derive",
     "to_frame", "load_arrays", "manifest_path", "read_manifest",
-    "write_manifest",
+    "write_manifest", "shard_path", "shard_from_env", "merge_shards",
     # events
     "read_events", "summarize_events", "format_summary", "parse_log",
     # tasks

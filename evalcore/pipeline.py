@@ -26,7 +26,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
@@ -40,6 +40,7 @@ from .core.calibrate import Calibration, calibrate, derive
 from .core.events import events_path, summarize_events
 from .core.records import manifest_path, to_frame, utc_now, write_atomic
 from .core.runner import Plan, execute, plan, rendered
+from .core.shards import check_shard, combine_shards, shard_of, shard_path
 from .core.spec import Cell, Unit, digest
 from .tasks.base import Task
 
@@ -145,8 +146,8 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
     calls still to make cannot be estimated: an unchecked budget is not a
     budget."""
     o = exp.options
-    p = plan(exp.units(), exp.backend, exp.task.render, exp.out, o.resume,
-             o.retry_errors, o.limit)
+    p = plan(exp.planned(), exp.backend, exp.task.render, exp.out, o.resume,
+             o.retry_errors)
     cache = exp.cache()
     cached = sum(1 for u in p.todo if cache and cache.has(p.keys[u.id]))
     to_call = len(p.todo) - cached
@@ -183,7 +184,7 @@ def execute_stage(exp: Experiment, res: Results) -> None:
         workers=s.get("workers") or o.workers or 8,
         batch_size=s.get("batch_size") or o.batch_size or 1,
         attempts=o.attempts, resume=o.resume, retry_errors=o.retry_errors,
-        limit=o.limit, events=o.events)
+        limit=o.limit, events=o.events, shard=exp.shard)
 
 
 def analyse_stage(exp: Experiment, res: Results) -> None:
@@ -244,6 +245,8 @@ class Experiment:
     execute: Stage | None = execute_stage
     analyse: Stage | None = analyse_stage
     report: Stage | None = report_stage
+    # set by `sharded` only, so not an __init__ argument
+    shard: tuple[int, int] | None = field(default=None, init=False)
 
     STAGES = ("calibrate", "dry_run", "execute", "analyse", "report")
 
@@ -288,8 +291,49 @@ class Experiment:
         return self.task.units(self.cells, self.repeats)
 
     def planned(self) -> list[Unit]:
-        """The units a run plans: all of them, or the first `limit`."""
-        return self.units()[:self.options.limit]
+        """The units a run plans: all of them, or the first `limit`, and
+        under a shard only that shard's share of those."""
+        us = self.units()[:self.options.limit]
+        if self.shard is None:
+            return us
+        i, n = self.shard
+        return [u for u in us if shard_of(u.id, n) == i]
+
+    def sharded(self, i: int, n: int) -> Experiment:
+        """This experiment as shard i of n: its own sink at
+        `shard_path(out, i, n)` (calibration, report and marker beside it),
+        only its share of the units, and no analysis, since one shard's
+        tables would describe a fraction of the sweep.  `merge(n)` analyses
+        the whole once the shards are done."""
+        if self.shard is not None:
+            raise ValueError(f"already shard {self.shard}")
+        shard = check_shard((i, n))
+        exp = replace(self, out=shard_path(self.out, i, n))
+        exp.shard = shard
+        return exp
+
+    def merge(self, n: int) -> Results:
+        """Combine the n shards into one sink at `out` (core.shards.
+        combine_shards), then analyse and report it as an unsharded run
+        would.  The marker records the merged sink's status, so a later
+        unsharded `run` of the same job skips straight to analysis."""
+        if self.shard is not None:
+            raise ValueError("merge the unsharded experiment, not a shard")
+        assert isinstance(self.out, Path)
+        combine_shards(self.out, n)
+        res = Results(self.out, job_hash=self.job_hash())
+        res.frame = to_frame(self.out)
+        for stage in (self.analyse, self.report):
+            if stage is not None:
+                stage(self, res)
+        status, counts = job_status(self.out, self.planned())
+        prov = provenance()
+        res.marker = {"job_hash": res.job_hash, "status": status,
+                      "halted": None, "counts": counts,
+                      "merged_from": n, "finished_at": utc_now(),
+                      "commit": prov["commit"], "dirty": prov["dirty"]}
+        write_marker(self.path("done"), res.marker)
+        return res
 
     def cache(self) -> Cache | None:
         return Cache(self.options.cache_dir) if self.options.cache_dir else None
@@ -340,14 +384,17 @@ class Experiment:
         keys = sorted(request_key(rendered(self.task.render, u), u.repeat,
                                   self.backend)
                       for u in self.planned())
-        return digest({
+        job = {
             "task": self.task.name, "task_version": self.task.version,
             "items": [[i.item_id, dict(i.payload), i.group, i.parent_id]
                       for i in self.task.items],
             "cells": [dict(c.params) for c in self.cells],
             "repeats": self.repeats, "backend": self.backend.identity(),
             "batch_size": o.batch_size, "limit": o.limit,
-            "requests": digest(keys)})
+            "requests": digest(keys)}
+        if self.shard is not None:        # unsharded hashes stay as they were
+            job["shard"] = list(self.shard)
+        return digest(job)
 
     def run(self) -> Results:
         """Run every enabled stage in order, and after a halt only the report.
@@ -376,7 +423,8 @@ class Experiment:
         for name in self.STAGES:
             stage = getattr(self, name)
             if (stage is None or (res.halted and name != "report")
-                    or (res.skipped and name in model_stages)):
+                    or (res.skipped and name in model_stages)
+                    or (self.shard is not None and name == "analyse")):
                 continue
             if name in model_stages:
                 write_marker(done, {"job_hash": res.job_hash,

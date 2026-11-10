@@ -1,4 +1,6 @@
 """python -m evalcore run config.json [--dry-run] [--yes] [--recalibrate]
+                                     [--shard I/N | --shard slurm]
+python -m evalcore merge config.json --shards N
 python -m evalcore summarize runs/sweep.jsonl
 python -m evalcore list [kind] [--plugin module_or_file.py ...]"""
 
@@ -10,6 +12,7 @@ import sys
 
 from .config import _plugins, from_config
 from .core.events import format_summary, summarize_events
+from .core.shards import check_shard, shard_from_env
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +25,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--yes", action="store_true",
                    help="proceed even above options.max_cost")
     r.add_argument("--recalibrate", action="store_true")
+    r.add_argument("--shard", metavar="I/N|slurm",
+                   help="run only shard I of N (\"slurm\": this array task's)")
+    m = sub.add_parser("merge", help="combine a sharded run, then analyse it")
+    m.add_argument("config")
+    m.add_argument("--shards", type=int, required=True, metavar="N")
     s = sub.add_parser("summarize", help="summarise a sink's event log")
     s.add_argument("sink")
     ls = sub.add_parser("list", help="registered components and their keys")
@@ -49,6 +57,16 @@ def main(argv: list[str] | None = None) -> int:
         print(format_summary(summarize_events(a.sink)))
         return 0
     exp = from_config(a.config)
+    if a.cmd == "merge":
+        res = exp.merge(a.shards)
+        print(f"merged {a.shards} shards into {exp.out}: "
+              f"{res.marker['status'] if res.marker else '?'}")
+        for name, table in res.analysis.items():
+            print(f"\n{name}:\n{table.to_string(index=False)}")
+        print(f"\nreport: {res.report_path}")
+        return 0
+    if a.shard:
+        exp = exp.sharded(*_shard_arg(a.shard))
     exp.options = dataclasses.replace(
         exp.options, dry_run_only=a.dry_run or exp.options.dry_run_only,
         confirm=a.yes or exp.options.confirm,
@@ -62,6 +80,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{name}:\n{table.to_string(index=False)}")
     print(f"\nreport: {res.report_path}")
     return 1 if res.halted and res.halted != "dry run only" else 0
+
+
+def _shard_arg(text: str) -> tuple[int, int]:
+    """"3/16" -> (3, 16), "slurm" -> this array task's shard."""
+    if text == "slurm":
+        return shard_from_env()
+    i, sep, n = text.partition("/")
+    if not sep or not i.isdigit() or not n.isdigit():
+        raise SystemExit(f"--shard: expected I/N or slurm, got {text!r}")
+    return check_shard((int(i), int(n)))
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ from .records import (
     to_frame,
     write_manifest,
 )
+from .shards import check_shard, shard_of
 from .spec import Unit, digest
 
 Render = Callable[[Unit], Request]
@@ -382,6 +383,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         retry_errors: bool = True, limit: int | None = None,
         log_every: int = 25, events: bool = True,
         manifest: str | Path | bool = True,
+        shard: tuple[int, int] | None = None,
         stream: TextIO = sys.stderr) -> pd.DataFrame:
     """Execute `units`, writing one row per unit to `out` (JSONL), and
     return the frame.
@@ -395,14 +397,26 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     that file to `attrition` to see the units nobody ever attempted.  Every
     unit, retry and run boundary is appended to `<out>.events.jsonl`
     (`events=False` disables it).  Resume decisions: see `plan`.
+
+    `shard=(i, n)` runs only the units of shard i of n (see core.shards),
+    for one task of a SLURM array or one of several machines.  Give each
+    shard its own `out` (`shard_path`), and merge with `merge_shards`.  The
+    manifest still records the whole plan, so a shard that never started
+    is counted missing.
     """
     backend.identity()                    # refuse before touching any file
     out = Path(out)
-    p = plan(units, backend, render, out, resume, retry_errors, limit)
+    everything = list(units)[:limit]
+    mine: Callable[[str], bool] = lambda uid: True    # noqa: E731
+    if shard is not None:
+        si, sn = check_shard(shard)
+        mine = lambda uid: shard_of(uid, sn) == si    # noqa: E731
+    p = plan([u for u in everything if mine(u.id)], backend, render, out,
+             resume, retry_errors)
     mpath = (None if manifest is False or manifest is None
              else manifest_path(out) if manifest is True else Path(manifest))
     if mpath is not None:
-        write_manifest(p.units, mpath)        # intent, before any execution
+        write_manifest(everything, mpath)     # intent, before any execution
     _report_plan(p, out, stream)
     ctx = _Context(
         backend, render, score, p.keys, out, JsonlSink(out),
@@ -432,11 +446,12 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     finally:
         ctx.sink.close()
         backend.close()
-    _finish(ctx, mpath)
+    _finish(ctx, mpath, mine)
     return to_frame(out)
 
 
-def _finish(ctx: _Context, mpath: Path | None) -> None:
+def _finish(ctx: _Context, mpath: Path | None,
+            mine: Callable[[str], bool]) -> None:
     el = time.perf_counter() - ctx.t0
     c = ctx.cache
     ctx.emit("run_end", units_done=ctx.n, errors=ctx.errors, elapsed_s=el,
@@ -451,8 +466,10 @@ def _finish(ctx: _Context, mpath: Path | None) -> None:
         # Against the manifest, not this invocation's units: a narrowed
         # resume (a `limit=`, one condition re-run) is exactly the case where the
         # shortfall is invisible from the call site.
-        never = len({r["unit_id"] for r in _read_records(mpath)}
-                    - ctx.sink.seen.keys())
+        # Under a shard, only this shard's units: the others are other
+        # processes' work, not this one's shortfall.
+        never = len({r["unit_id"] for r in _read_records(mpath)
+                     if mine(r["unit_id"])} - ctx.sink.seen.keys())
         if never:
             print(f"[run] WARNING {never} planned units were never attempted. "
                   f"Pass manifest={str(mpath)!r} to attrition()",

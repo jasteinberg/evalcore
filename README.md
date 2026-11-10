@@ -164,6 +164,7 @@ locally.
 | `backends/check.py` | `check_backend`: a conformance check for a backend you write |
 | `runner.py` | `plan()` and `execute()`: resume, batching, status, scoring |
 | `records.py` | the JSONL sink, the plan manifest, `.npz` array sidecars, `to_frame` |
+| `shards.py` | one sweep split across processes (a SLURM array, several machines), and the merge |
 | `events.py` | the run's event log, `summarize_events`, `parse_log` for foreign logs |
 | `calibrate.py` | `calibrate`, `derive` |
 | `agent.py`, `tools.py` | `AgentBackend` (the multi-turn tool loop), `Tool` |
@@ -428,6 +429,32 @@ of judges n/(1 + (n − 1)ρ̄). `tasks.judge_calibration` writes answers whose
 correctness is known by construction (hedges, self-corrections, near-name
 distractors) to measure judges on.
 
+## Sharding
+
+One config can run as n independent processes, for example the tasks of a
+SLURM array, and be merged afterwards:
+
+```bash
+#SBATCH --array=0-15
+python -m evalcore run config.json --shard slurm     # or --shard 3/16
+```
+```bash
+python -m evalcore merge config.json --shards 16      # once the array is done
+```
+
+A unit belongs to shard `sha256(unit_id) mod n`, so every process computes
+the same partition on its own, and a resumed shard picks up exactly its own
+units. Each shard writes its own sink, calibration and report at
+`runs/x.shard03-of-16.jsonl`, because appends to one shared file are not
+atomic on a network file system. The cache (`options.cache_dir`) can be
+shared. A shard runs no analysis, since its tables would describe a fraction
+of the sweep. `merge` writes the shards' rows and the whole plan to `out`,
+then analyses and reports it as an unsharded run would. Every shard's
+manifest records the whole plan, so the units of a shard that never started
+count as missing. Running the late shard and merging again fills them in.
+From Python the same is `exp.sharded(i, n).run()` and `exp.merge(n)`, or
+`execute(..., shard=(i, n))` with `merge_shards`.
+
 ## Outputs
 
 For `out="runs/x.jsonl"`:
@@ -442,6 +469,7 @@ For `out="runs/x.jsonl"`:
 | `runs/x.jsonl.analysis/*.csv` | attrition and summary tables |
 | `runs/x.jsonl.run.json` | the report |
 | `runs/x.jsonl.done` | the job hash and its status (running or complete). On resume a complete job skips its model calls and only re-analyses |
+| `runs/x.jsonl.shards.json` | written by `merge`: which shards the sink was combined from |
 
 ## Outside the package
 
