@@ -115,10 +115,10 @@ def ratio_se(num: np.ndarray, den: np.ndarray) -> float:
     construction (num_c - r den_c = 0 for the one cluster that holds the
     domain), and eq. (1) would return 0, not an estimate: NaN instead."""
     num, den = np.asarray(num, float), np.asarray(den, float)
-    k, total = len(num), den.sum()
+    k, total = len(num), float(den.sum())
     if k < 2 or total == 0 or (den > 0).sum() < 2:
         return float("nan")
-    r = num.sum() / total
+    r = float(num.sum()) / total
     return float(np.sqrt(k / (k - 1) * ((num - r * den) ** 2).sum()) / total)
 
 
