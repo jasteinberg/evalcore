@@ -101,10 +101,13 @@ def _write_line(fd: int, rec: Mapping[str, Any], path: Path,
     process's.  A buffered file object gives neither guarantee per record.
     It flushes in fixed-size chunks, so a record can straddle two writes and
     a concurrent writer's record can land between its halves (a torn line,
-    dropped on read).  Between two of these writes the file always ends in a
-    newline, so `_terminate_partial_line` in another writer cannot mistake a
-    live writer's record for a crash fragment.  The bytes reach the OS when
-    the call returns, as a flush would.  A short write raises."""
+    dropped on read).  Two O_APPEND writes never interleave, but a reader
+    can see one in progress (Linux grows the file page by page), so
+    `_terminate_partial_line` in another writer can take a live record for
+    a crash fragment.  Its newline is itself an append, so it lands after
+    the live record, and the cost is a blank line, which every reader
+    skips.  The bytes reach the OS when the call returns, as a flush
+    would.  A short write raises."""
     data = (json.dumps(rec, default=default) + "\n").encode()
     n = os.write(fd, data)
     if n != len(data):

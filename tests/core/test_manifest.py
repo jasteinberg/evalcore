@@ -337,8 +337,11 @@ def test_manifest_writes_are_append_only_and_concurrent_safe(tmp_path,
     assert errs == []
     assert len(got) == 400                         # nobody's plan was erased
     assert sorted(got["model"].unique()) == [f"m{k}" for k in range(8)]
+    # none torn: every record line parses.  A blank line can appear (a
+    # writer's crash-fragment terminator seeing another's write in
+    # progress, see _write_line), and readers skip it.
     lines = mp.read_text().splitlines()
-    assert all(json.loads(x)["unit_id"] for x in lines)    # none torn
+    assert all(json.loads(x)["unit_id"] for x in lines if x.strip())
     # and re-planning does not grow the file
     write_manifest(plans[0], mp)
     assert len(mp.read_text().splitlines()) == len(lines)
