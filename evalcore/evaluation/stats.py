@@ -469,12 +469,13 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
 
 
 # Coverage of a nominal 95% cluster-bootstrap interval against the true
-# mean, by number of clusters k (BCa with ties counted half, B = 2000, 400
+# mean, by number of clusters k (BCa with ties counted half, B = 2000, 1000
 # simulated datasets per k, each of k clusters of 6 Gaussian rows at
-# rho = 0.6; binomial SE of each figure 0.011 at 0.95, 0.023 at 0.69).
-# Measured 10 Nov 2026 (5 Oct, before the tie fix: 0.68, 0.83, 0.88, 0.93,
-# 0.95).  The percentile method is within 0.03 throughout.
-SMALL_K_COVERAGE = {3: 0.69, 5: 0.84, 10: 0.90, 20: 0.93, 30: 0.95}
+# rho = 0.6; binomial SE of each figure 0.007 at 0.94, 0.014 at 0.73).
+# Measured 10 Nov 2026 by scripts/coverage_figure.py, which draws
+# docs/coverage.png from the same run.  The percentile method is
+# within 0.03 throughout.
+SMALL_K_COVERAGE = {3: 0.73, 5: 0.84, 10: 0.90, 20: 0.92, 30: 0.94}
 MIN_CLUSTERS = 20
 MAX_EXCLUDED_SHARE = 0.10
 
@@ -494,7 +495,7 @@ def cell_caveats(rec: Mapping[str, Any]) -> list[str]:
     * Few clusters: the bootstrap estimates the spread of a mean from the
       clusters themselves, and with few of them it underestimates it, so
       the interval is too narrow (SMALL_K_COVERAGE: a nominal 95% interval
-      covers ~68% of the time at k = 3).
+      covers ~73% of the time at k = 3).
     * No spread: every value identical, so the interval has zero width --
       a statement about the sample, not certainty about the population.
     * Many excluded: rows without a value (errors, truncated, unparsed)

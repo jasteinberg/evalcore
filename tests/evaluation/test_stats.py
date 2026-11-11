@@ -263,7 +263,7 @@ def test_few_clusters_are_flagged_with_the_measured_undercoverage():
     with pytest.warns(RuntimeWarning, match="1 of 1 cells carry caveats"):
         s = summarize(frame_of(3), "y", ["condition"], n_boot=200)
     assert "only 3 clusters" in s.iloc[0]["caveats"]
-    assert "covers ~69% at k=3" in s.iloc[0]["caveats"]
+    assert "covers ~73% at k=3" in s.iloc[0]["caveats"]
 
 
 def test_a_well_resolved_cell_has_no_caveats_and_no_warning(recwarn):

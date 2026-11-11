@@ -329,24 +329,25 @@ At `rho -> 1`, ten paraphrases of one question buy you one question. At
 `rho -> 0` they buy ten. `summarize()` prints `n_eff` beside `n_rows` for
 exactly this reason.
 
-Measured on the simulated check in `tests/` (k=40, m=6, rho=0.44, DEFF=3.2,
-N=240, n_eff=76), coverage of a nominal 95% interval:
+Coverage of a nominal 95% interval, simulated (m=6 rows per cluster,
+rho=0.6, DEFF=4; at k=40, N=240 rows and n_eff=60; 1000 datasets per k):
 
-| method | coverage |
-|---|---|
-| cluster bootstrap | 0.943 |
-| row bootstrap | 0.687 |
+![Coverage against the number of clusters](docs/coverage.png)
 
-The bootstrap needs enough clusters to see their spread. With few, its
-interval is too narrow, and `summarize` flags the cell:
+| clusters k | cluster bootstrap (BCa) | row bootstrap |
+|---|---|---|
+| 3 | 0.73 | 0.57 |
+| 5 | 0.84 | 0.62 |
+| 10 | 0.90 | 0.63 |
+| 20 | 0.92 | 0.64 |
+| 40 | 0.94 | 0.67 |
 
-| clusters | coverage of a nominal 95% interval |
-|---|---|
-| 3 | 0.68 |
-| 5 | 0.83 |
-| 10 | 0.88 |
-| 20 | 0.93 |
-| 30+ | ~0.95 |
+The row bootstrap's interval is too narrow by `sqrt(DEFF)` at every k, so
+it settles at `2 Phi(1.96/sqrt(DEFF)) - 1 = 0.673`, not at 0.95. The
+cluster bootstrap needs enough clusters to see their spread. With few, its
+interval is too narrow too, and `summarize` flags any cell below 20
+clusters. `python scripts/coverage_figure.py --out docs/coverage.png`
+regenerates the figure, and its table goes beside it as a CSV.
 
 ## Retrieval
 
