@@ -160,6 +160,28 @@ def test_commit_plus_patch_rebuild_the_code_that_ran(tmp_path):
     assert source_digest(clean / "src" / "evalcore") == prov["source_digest"]
 
 
+def test_a_copy_installed_inside_another_repo_has_no_commit(tmp_path):
+    """The package installed into a gitignored virtualenv inside another
+    project's checkout.  git, searching upward, finds that project's
+    repository, whose HEAD says nothing about this code: no commit, no
+    dirty flag, no patch.  The source digest still identifies it."""
+    if shutil.which("git") is None:
+        pytest.skip("no git")
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / ".gitignore").write_text(".venv/\n")
+    (host / "main.py").write_text("X = 1\n")
+    git(tmp_path, "init", "-q", str(host))
+    git(host, "add", ".")
+    git(host, "commit", "-qm", "host")
+    pkg = host / ".venv" / "lib" / "site-packages" / "evalcore"
+    shutil.copytree(PKG, pkg, ignore=shutil.ignore_patterns("__pycache__"))
+    assert git(pkg, "rev-parse", "HEAD").strip()     # git does find the host
+    prov = provenance(pkg)
+    assert (prov["commit"], prov["dirty"], prov["diff"]) == (None, None, "")
+    assert prov["source_digest"] == source_digest(PKG)
+
+
 def test_a_clean_checkout_has_no_patch(tmp_path):
     if shutil.which("git") is None:
         pytest.skip("no git")

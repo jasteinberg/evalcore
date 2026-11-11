@@ -181,10 +181,15 @@ def _plan(units: list[Unit], backend: Backend, render: Render,
           score_version: str | None, batch_size: int | None,
           content: dict[str, str] | None = None) -> Plan:
     """`plan` against a sink state already in memory.  `content` carries
-    the clash check across calls (see `_refuse_clashes`)."""
-    _refuse_clashes(units, content)
+    the clash check across calls (see `_refuse_clashes`).  It learns the
+    units' items only once every unit has rendered, so a unit whose render
+    raised (and which therefore wrote no row) is not remembered: corrected
+    and run again, it is planned as if it had never been seen."""
+    new = _refuse_clashes(units, content)
     keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
             for u in units}
+    if content is not None:
+        content.update(new)
     p = Plan(units, keys, [], unreadable=state.unreadable)
     for u in units:
         if not resume or u.id not in state.seen:
@@ -207,7 +212,7 @@ def _plan(units: list[Unit], backend: Backend, render: Render,
 
 
 def _refuse_clashes(units: Sequence[Unit],
-                    seen: dict[str, str] | None = None) -> None:
+                    seen: Mapping[str, str] | None = None) -> dict[str, str]:
     """Refuse a plan whose rows could not each describe their own unit.
 
     Two units with one unit_id but different items (an item_id reused for a
@@ -218,8 +223,8 @@ def _refuse_clashes(units: Sequence[Unit],
 
     `seen` (unit_id -> item content digest) is the memory of earlier calls:
     a Runner passes the same dict every time, so the check spans every unit
-    it has planned, as one `execute` call's does.  It is updated in place,
-    and only once the whole batch passes."""
+    it has planned, as one `execute` call's does.  Returns the digests of
+    `units`, for the caller to merge into `seen` once the plan is made."""
     seen = {} if seen is None else seen
     new: dict[str, str] = {}
     names: set[str] = set()
@@ -239,7 +244,7 @@ def _refuse_clashes(units: Sequence[Unit],
         raise ValueError(
             f"cell param/tag name(s) {bad} clash with columns the runner "
             f"writes ({sorted(RUNNER_COLUMNS)} and meta_*). Rename them")
-    seen.update(new)
+    return new
 
 
 def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
@@ -469,15 +474,34 @@ class Runner:
     (see `plan`).  The event log gets one run_start when the Runner opens
     and one run_end when it closes cleanly, with each unit's events
     between.  A Runner left by an exception closes without a run_end, so
-    the log says the run was killed, as for `execute`.
+    the log says the run was killed, as for `execute`.  A `run` refused
+    before any call (an item_id reused for another item, a cell name that
+    clashes with a runner column) writes no row and logs a `refused` event
+    with the reason, then raises.  Caught, the Runner carries on.  Not
+    caught, it is that exception that ends the run.
+
+    The clash check spans every unit the Runner has planned, so an item_id
+    reused with another payload is refused.  N single-unit `execute` calls
+    did not check across calls: the later row silently superseded the
+    earlier one.  That is the one way a Runner's rows differ from theirs.
 
     Nothing between the call to `run` and the backend's call draws from a
     global random generator (Python's, numpy's or torch's), so a caller
     that seeds before each `run` gives the backend the state it seeded.
 
-    The rows of the sink are held in memory, so that a done unit's row is
-    returned without reading the file.  One caller thread: `workers`
-    parallelises within a `run_batch`, not across concurrent calls.
+    The sink's rows (each unit's last) are held in memory, so that a done
+    unit's row is returned without reading the file: memory grows with the
+    sink.  (`execute`'s Runner holds them only while planning a re-score.)
+    One caller thread: `workers` parallelises within a `run_batch`, not
+    across concurrent calls.
+
+    One writer per sink.  The state is read once, so rows another process
+    appends to the same sink while this Runner is open are not seen: both
+    could call the same unit, and resume answers from this Runner's view.
+    Shards write separate sinks (see `execute`).  An incremental caller is
+    not sharded: `run` is given units one at a time, so the manifest could
+    not record the whole plan before the first call, which is what lets
+    `merge_shards` count a shard that never started.
     """
 
     def __init__(self, backend: Backend, render: Render, score: Score,
@@ -486,9 +510,10 @@ class Runner:
                  resume: bool = True, retry_errors: bool = True,
                  log_every: int = 25, events: bool = True,
                  manifest: str | Path | bool = True,
-                 shard: tuple[int, int] | None = None,
                  score_version: str | None = None,
-                 stream: TextIO = sys.stderr, _keep_rows: bool = True) -> None:
+                 stream: TextIO = sys.stderr,
+                 _shard: tuple[int, int] | None = None,
+                 _keep_rows: bool = True) -> None:
         backend.identity()                # refuse before touching any file
         self.backend, self.render, self.score = backend, render, score
         self.out = Path(out)
@@ -498,8 +523,8 @@ class Runner:
         self.events, self.score_version, self.stream = (events, score_version,
                                                         stream)
         self.mine: Callable[[str], bool] = lambda uid: True
-        if shard is not None:
-            si, sn = check_shard(shard)
+        if _shard is not None:              # execute's only
+            si, sn = check_shard(_shard)
             self.mine = lambda uid: shard_of(uid, sn) == si
         self.mpath = (None if manifest is False or manifest is None
                       else manifest_path(self.out) if manifest is True
@@ -517,7 +542,7 @@ class Runner:
 
     # -- the steps, in the order execute takes them --------------------------
 
-    def plan(self, units: Sequence[Unit]) -> Plan:
+    def _plan_units(self, units: Sequence[Unit]) -> Plan:
         """The resume decisions for `units` against the sink as it stands
         in memory (`plan`), without a call or a file read."""
         p = _plan(list(units), self.backend, self.render, self.state,
@@ -526,7 +551,7 @@ class Runner:
         self.keys.update(p.keys)
         return p
 
-    def record(self, units: Iterable[Unit]) -> None:
+    def _record(self, units: Iterable[Unit]) -> None:
         """Append to the manifest the units it does not yet record (the
         plan, before any call: see `write_manifest`)."""
         if self.mpath is None:
@@ -571,7 +596,10 @@ class Runner:
                       identity=digest(b.identity()), out=str(out))
         return self
 
-    def rescore(self, p: Plan) -> None:
+    def _rescore(self, p: Plan) -> None:
+        """Write a re-scored row for each unit of `p.rescore`: the stored
+        response scored again under this Runner's `score_version`, with
+        no call."""
         ctx = self._open_ctx()
         for u in p.rescore:               # no call: score the stored response
             row = _row(u, p.keys[u.id], _response_of(p.rows[u.id]), self.score,
@@ -579,12 +607,12 @@ class Runner:
             ctx.sink.write(row)
             ctx.emit("rescore", unit_id=u.id, status=row["status"])
 
-    def call(self, todo: Sequence[Unit]) -> None:
+    def _call(self, todo: Sequence[Unit]) -> None:
         """Call the backend for `todo`, in batches of `batch_size` over
         `workers` threads, writing each unit's row as it comes back."""
         ctx, bs = self._open_ctx(), max(1, self.batch_size)
         batches = [todo[i:i + bs] for i in range(0, len(todo), bs)]
-        if self.workers <= 1:
+        if self.workers <= 1 or len(batches) <= 1:
             for b in batches:
                 _batch(ctx, b)
         else:
@@ -620,20 +648,22 @@ class Runner:
     def run_batch(self, units: Iterable[Unit]) -> list[dict[str, Any]]:
         """The rows of `units`, in order, as `run` makes each one, with
         the calls batched by `batch_size` over `workers` threads."""
-        self._open_ctx()
+        ctx = self._open_ctx()
         if not self.state.keep_rows:
             raise RuntimeError("this Runner does not hold the sink's rows")
         units = list(units)
-        other = [u.id for u in units if not self.mine(u.id)]
-        if other:
-            raise ValueError(f"units {other[:3]} belong to another shard")
-        p = self.plan(units)
-        self.record(p.units)
+        try:
+            p = self._plan_units(units)
+        except ValueError as exc:         # a refusal: nothing was written
+            ctx.emit("refused", unit_ids=[u.id for u in units][:10],
+                     error=str(exc)[:300])
+            raise
+        self._record(p.units)
         self.tally.update(stale=p.stale, retried=p.retried,
                           rescored=len(p.rescore),
                           from_sink=p.done - len(p.rescore))
-        self.rescore(p)
-        self.call(p.todo)
+        self._rescore(p)
+        self._call(p.todo)
         # as the sink holds it (JSON), so the row equals what to_frame reads
         return [json.loads(json.dumps(self.state.rows[u.id],
                                       default=json_default))
@@ -725,16 +755,22 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     r = Runner(backend, render, score, out, cache=cache, workers=workers,
                batch_size=batch_size, attempts=attempts, resume=resume,
                retry_errors=retry_errors, log_every=log_every, events=events,
-               manifest=manifest, shard=shard, score_version=score_version,
-               stream=stream, _keep_rows=score_version is not None)
-    p = r.plan([u for u in everything if r.mine(u.id)])
-    r.record(everything)                  # intent, before any execution
+               manifest=manifest, score_version=score_version,
+               stream=stream, _shard=shard,
+               _keep_rows=score_version is not None)
+    p = r._plan_units([u for u in everything if r.mine(u.id)])
+    # p.rows holds the rows a re-score reads.  Nothing else in execute
+    # reads the state's rows, so it stops keeping them (and every row
+    # written from here on): memory stays at the plan's, as before Runner.
+    r.state.keep_rows = False
+    r.state.rows.clear()
+    r._record(everything)                 # intent, before any execution
     _report_plan(p, r.out, stream)
     r.open({"n_units": len(p.units), "to_go": len(p.todo), "done": p.done,
             "stale": p.stale, "retried": p.retried}, total=len(p.todo))
     try:
-        r.rescore(p)
-        r.call(p.todo)
+        r._rescore(p)
+        r._call(p.todo)
     except BaseException:
         r.close(killed=True)
         raise

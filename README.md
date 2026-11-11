@@ -461,6 +461,20 @@ sink without a call, and the rows written are identical to those of one
 backend's call draws from a global random generator, so a caller that
 seeds before each `run` gives the backend that seed's state.
 
+The Runner's state differs from N `execute` calls in three respects:
+
+- The duplicate-item check spans every unit the Runner has planned. An
+  `item_id` reused with a different payload is refused (a `refused` event,
+  no row) where successive `execute` calls let the later row supersede the
+  earlier one.
+- The last row of every unit in the sink is held in memory, so memory
+  grows linearly with the sink.
+- The state is read once. Rows another process appends to the same sink
+  while the Runner is open are not seen, so one sink has one writer. A
+  Runner is not sharded: sharding needs the whole plan in the manifest
+  before the first call, which `execute` has and a caller handing over
+  one unit at a time does not.
+
 ## Sharding
 
 One config can run as n independent processes, for example the tasks of a

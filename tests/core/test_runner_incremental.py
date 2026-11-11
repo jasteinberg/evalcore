@@ -15,6 +15,7 @@ import io
 import json
 import os
 import random
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -404,3 +405,154 @@ def test_a_refused_construction_touches_no_file(tmp_path):
     with pytest.raises(ValueError, match="no identity"):
         runner(Broken(), tmp_path / "rows.jsonl")
     assert list(tmp_path.iterdir()) == []
+
+
+# --- 7. error paths (audit of b833ae4) ---------------------------------------
+
+def test_execute_with_a_score_version_holds_no_rows_while_it_calls(
+        tmp_path, monkeypatch):
+    """execute needs a unit's stored row only to plan its re-score.  Once
+    planned, the state keeps no rows, including the rows execute writes:
+    memory stays at the plan's, as before execute was built on Runner."""
+    held = []
+    real = Runner.close
+
+    def close(self: Runner, killed: bool = False) -> None:
+        held.append(len(self.state.rows))
+        real(self, killed)
+    monkeypatch.setattr(Runner, "close", close)
+    out, us = tmp_path / "rows.jsonl", one_cell(20)
+    execute(us[:10], Answers(), render, echo_score, out, workers=1,
+            score_version="v1", stream=io.StringIO())
+    df = execute(us, Answers(), render, echo_score, out, workers=1,
+                 score_version="v2", stream=io.StringIO())
+    assert held == [0, 0]
+    assert (df["score_version"] == "v2").all() and len(df) == 20
+
+
+class ChecksManifest(Answers):
+    """Answers, and records whether the manifest named the unit at the
+    moment of its call (the manifest is written before the first call)."""
+
+    def __init__(self, mpath: Path) -> None:
+        super().__init__()
+        self.mpath, self.planned_at_call = mpath, {}
+
+    def complete(self, req: Request) -> Response:
+        self.planned_at_call[req.unit_id] = req.unit_id in {
+            r["unit_id"] for r in raw_rows(self.mpath)}
+        return super().complete(req)
+
+
+def test_a_failed_manifest_write_is_retried_before_the_call(tmp_path,
+                                                            monkeypatch):
+    """The manifest write fails once (a full disk).  The unit is not
+    remembered as planned, so the caller's retry writes its record and
+    only then calls it."""
+    out, us = tmp_path / "rows.jsonl", one_cell(2)
+    real = records_mod._append_records
+    fail = [True]
+
+    def append(path: Path, recs: Any) -> None:
+        if fail and recs:
+            fail.pop()
+            raise OSError(28, "No space left on device")
+        real(path, recs)
+    monkeypatch.setattr(records_mod, "_append_records", append)
+    b = ChecksManifest(manifest_path(out))
+    with runner(b, out) as r:
+        with pytest.raises(OSError):
+            r.run(us[0])
+        r.run(us[0])
+        r.run(us[1])
+    assert b.planned_at_call == {us[0].id: True, us[1].id: True}
+    assert sorted(read_manifest(manifest_path(out))["unit_id"]) == sorted(
+        u.id for u in us)
+
+
+def test_a_unit_whose_render_raised_runs_once_corrected(tmp_path):
+    """Render raises for a malformed item, so no row is written.  The
+    corrected item, with the same item_id, then runs: the failed attempt
+    is not remembered by the clash check."""
+    def strict(u: Unit) -> Request:
+        if "q" not in u.item.payload:
+            raise KeyError("q")
+        return render(u)
+    cell = grid({"model": ["m"]})
+    bad = next(iter(units(cell, [Item("q0", {"question": "x"})])))
+    good = next(iter(units(cell, [Item("q0", {"q": "question 0"})])))
+    out = tmp_path / "rows.jsonl"
+    with Runner(Answers(), strict, echo_score, out,
+                stream=io.StringIO()) as r:
+        with pytest.raises(KeyError):
+            r.run(bad)
+        row = r.run(good)
+    assert row["answer"] == "question 0"
+    assert [x["item_id"] for x in raw_rows(out)] == ["q0"]
+
+
+@pytest.mark.parametrize("caught", [True, False])
+def test_a_refused_run_is_logged_with_its_reason(tmp_path, caught):
+    """A clash refused by `run` logs a `refused` event and writes no row.
+    Caught, the Runner closes cleanly (a run_end).  Not caught, the
+    exception ends the run, which the log reports as killed."""
+    cell = grid({"model": ["m"]})
+    a = next(iter(units(cell, [Item("q0", {"q": "question 0"})])))
+    b = next(iter(units(cell, [Item("q0", {"q": "question 9"})])))
+    out = tmp_path / "rows.jsonl"
+    with pytest.raises(ValueError) if not caught else nullcontext():
+        with runner(Answers(), out) as r:
+            r.run(a)
+            try:
+                r.run(b)
+            except ValueError:
+                if not caught:
+                    raise
+    ev = read_events(out)
+    refused = ev[ev["event"] == "refused"]
+    assert len(refused) == 1
+    assert "names two different items" in refused.iloc[0]["error"]
+    assert refused.iloc[0]["unit_ids"] == [b.id]
+    assert summarize_events(out)["killed_runs"] == (0 if caught else 1)
+    assert len(raw_rows(out)) == 1
+
+
+def test_a_runner_cannot_be_sharded(tmp_path):
+    """A sharded sink's manifest must record the whole plan before the
+    first call, which a caller handing over one unit at a time cannot
+    give.  Sharding stays with execute."""
+    with pytest.raises(TypeError):
+        Runner(Answers(), render, echo_score, tmp_path / "r.jsonl",
+               shard=(0, 2))                          # type: ignore[call-arg]
+    assert list(tmp_path.iterdir()) == []
+
+
+class Batches(Answers):
+    """Answers, recording the size of every batch it is handed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sizes: list[int] = []
+
+    def complete_batch(self, reqs: Any) -> list[Response]:
+        with self.lock:
+            self.sizes.append(len(reqs))
+        return [self.complete(q) for q in reqs]
+
+
+def test_run_batch_over_workers_writes_what_execute_writes(tmp_path):
+    """run_batch with batch_size 4 over 3 workers: the backend sees 10
+    units as batches of 4, 4 and 2, and the rows equal those of one
+    execute call with the same settings (in unit order, since threads
+    finish in any order)."""
+    us = one_cell(10)
+    a, b = Batches(), Batches()
+    with runner(a, tmp_path / "r.jsonl", batch_size=4, workers=3) as r:
+        rows = r.run_batch(us)
+    execute(us, b, render, echo_score, tmp_path / "e.jsonl", batch_size=4,
+            workers=3, stream=io.StringIO())
+    assert sorted(a.sizes) == sorted(b.sizes) == [2, 4, 4]
+    assert [x["unit_id"] for x in rows] == [u.id for u in us]
+    key = lambda x: x["unit_id"]          # noqa: E731
+    assert sorted(rows, key=key) == sorted(raw_rows(tmp_path / "e.jsonl"),
+                                           key=key)

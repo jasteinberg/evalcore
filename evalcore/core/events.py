@@ -9,7 +9,11 @@ line, each with a wall-clock time `t` (ISO 8601, UTC) and `event`:
                 `incremental: true` instead of the plan fields
     unit        one per finished unit: status, latency, tokens, cached,
                 error (first 300 chars)
+    rescore     one per finished unit scored again without a call: unit,
+                status
     retry       one per retried attempt: unit, attempt, wait, reason
+    refused     a Runner's `run` refused before any call: the unit ids
+                (first 10) and the reason
     run_end     units done, errors, elapsed, cache hits / misses
 
 A run killed partway has a run_start and no run_end, which `summarize`

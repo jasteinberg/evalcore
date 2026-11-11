@@ -655,8 +655,16 @@ PACKAGE = Path(__file__).resolve().parent
 
 def checkout(pkg: Path = PACKAGE) -> dict[str, Any]:
     """The commit and dirty flag alone (None, None outside a git checkout),
-    for the completion marker, which is written often."""
+    for the completion marker, which is written often.
+
+    The package counts as a checkout only if the repository git finds
+    tracks the package's own `__init__.py`.  git searches upward from
+    `pkg`, so a copy installed into a virtualenv that sits inside another
+    project's working tree (gitignored) would otherwise report that
+    project's HEAD as evalcore's commit."""
     try:
+        if not _git(pkg, "ls-files", "--", "__init__.py").strip():
+            return {"commit": None, "dirty": None}   # not this repo's file
         return {"commit": _git(pkg, "rev-parse", "HEAD").strip(),
                 "dirty": bool(_git(pkg, "status", "--porcelain", "--",
                                    ".").strip())}

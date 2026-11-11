@@ -231,16 +231,19 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
 
 def append_plan(path: Path, units: Iterable[Unit], have: set[str]) -> None:
     """Append the units whose ids are not in `have` to the manifest at
-    `path`, adding their ids to `have`, then fsync.  `have` is what the
+    `path`, then fsync, then add their ids to `have`.  `have` is what the
     manifest already records: `write_manifest` reads it from the file, a
-    `Runner` holds it in memory.  The caller holds `_MANIFEST_LOCK`."""
+    `Runner` holds it in memory.  It learns an id only once the record is
+    on disk: if the write raises, a retried call appends it again rather
+    than run a unit the manifest never planned.  The caller holds
+    `_MANIFEST_LOCK`."""
     _terminate_partial_line(path)
-    fresh = []
+    fresh: dict[str, Mapping[str, Any]] = {}
     for u in units:
-        if u.id not in have:
-            have.add(u.id)
-            fresh.append(u.row())
-    _append_records(path, fresh)
+        if u.id not in have and u.id not in fresh:
+            fresh[u.id] = u.row()
+    _append_records(path, list(fresh.values()))
+    have.update(fresh)
 
 
 def _append_records(path: Path, recs: Sequence[Mapping[str, Any]]) -> None:
