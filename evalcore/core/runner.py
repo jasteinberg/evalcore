@@ -47,10 +47,12 @@ Design commitments, each of which is a lesson rather than a preference:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -71,14 +73,16 @@ from .backends import (
 )
 from .events import EventLog, events_path
 from .records import (
+    _MANIFEST_LOCK,
     ArrayStore,
-    JsonlSink,
+    SinkLog,
     SinkState,
     _read_records,
+    append_plan,
+    json_default,
     manifest_path,
     split_arrays,
     to_frame,
-    write_manifest,
 )
 from .shards import check_shard, shard_of
 from .spec import Unit, digest
@@ -167,10 +171,20 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     (`supports_target`: a local model), a row made at another batch size
     (or an unrecorded one) is stale, so one sink never mixes batch sizes."""
     units = list(units)[:limit]
-    _refuse_clashes(units)
+    return _plan(units, backend, render,
+                 SinkState(out, keep_rows=score_version is not None),
+                 resume, retry_errors, score_version, batch_size)
+
+
+def _plan(units: list[Unit], backend: Backend, render: Render,
+          state: SinkState, resume: bool, retry_errors: bool,
+          score_version: str | None, batch_size: int | None,
+          content: dict[str, str] | None = None) -> Plan:
+    """`plan` against a sink state already in memory.  `content` carries
+    the clash check across calls (see `_refuse_clashes`)."""
+    _refuse_clashes(units, content)
     keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
             for u in units}
-    state = SinkState(out, keep_rows=score_version is not None)
     p = Plan(units, keys, [], unreadable=state.unreadable)
     for u in units:
         if not resume or u.id not in state.seen:
@@ -192,21 +206,28 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     return p
 
 
-def _refuse_clashes(units: Sequence[Unit]) -> None:
+def _refuse_clashes(units: Sequence[Unit],
+                    seen: dict[str, str] | None = None) -> None:
     """Refuse a plan whose rows could not each describe their own unit.
 
     Two units with one unit_id but different items (an item_id reused for a
     different question) would share a row: resume and `to_frame` keep the
     last, so one answer is silently lost.  A cell param or tag named like a
     runner column (RUNNER_COLUMNS, or `meta_*`) would be overwritten in the
-    row, or overwrite it."""
-    seen: dict[str, str] = {}
+    row, or overwrite it.
+
+    `seen` (unit_id -> item content digest) is the memory of earlier calls:
+    a Runner passes the same dict every time, so the check spans every unit
+    it has planned, as one `execute` call's does.  It is updated in place,
+    and only once the whole batch passes."""
+    seen = {} if seen is None else seen
+    new: dict[str, str] = {}
     names: set[str] = set()
     for u in units:
         it = u.item
         content = digest({"payload": dict(it.payload), "group": it.group,
                           "parent_id": it.parent_id})
-        if seen.setdefault(u.id, content) != content:
+        if (seen.get(u.id) or new.setdefault(u.id, content)) != content:
             raise ValueError(
                 f"item_id {it.item_id!r} names two different items (payload, "
                 f"group or parent differ). Item ids must be unique, or one "
@@ -218,6 +239,7 @@ def _refuse_clashes(units: Sequence[Unit]) -> None:
         raise ValueError(
             f"cell param/tag name(s) {bad} clash with columns the runner "
             f"writes ({sorted(RUNNER_COLUMNS)} and meta_*). Rename them")
+    seen.update(new)
 
 
 def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
@@ -244,20 +266,20 @@ def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
 
 @dataclass
 class _Context:
-    """Everything the worker threads share during one invocation."""
+    """Everything the worker threads share while a Runner is open."""
 
     backend: Backend
     render: Render
     score: Score
     keys: dict[str, str]
     out: Path
-    sink: JsonlSink
+    sink: SinkLog
     store: ArrayStore
     cache: Cache | None
     events: EventLog | None
     attempts: int
     batch_size: int
-    total: int
+    total: int | None         # units to call, when known in advance
     log_every: int
     stream: TextIO
     t0: float = field(default_factory=time.perf_counter)
@@ -278,9 +300,12 @@ class _Context:
             n, errs = self.n, self.errors
         if n % self.log_every == 0:
             rate = n / max(time.perf_counter() - self.t0, 1e-9)
-            eta = (self.total - n) / max(rate, 1e-9)
-            print(f"[run] {n}/{self.total}  {rate:.1f}/s  eta {eta / 60:.1f}m"
-                  f"  err {errs}", file=self.stream, flush=True)
+            if self.total is None:
+                msg = f"{n}  {rate:.1f}/s"
+            else:
+                eta = (self.total - n) / max(rate, 1e-9)
+                msg = f"{n}/{self.total}  {rate:.1f}/s  eta {eta / 60:.1f}m"
+            print(f"[run] {msg}  err {errs}", file=self.stream, flush=True)
 
 
 def _join(reqs: Sequence[Request],
@@ -423,6 +448,245 @@ def _batch(ctx: _Context, batch: Sequence[Unit]) -> None:
 
 # --- run ------------------------------------------------------------------------
 
+class Runner:
+    """Execute units against one sink, a call (or a batch) at a time, with
+    the sink's state and the manifest held in memory.
+
+    For a sequential caller, whose next unit depends on the previous
+    unit's output and so cannot be handed over in a batch.  N single-unit
+    `execute` calls into one sink read the whole sink and manifest N times
+    (O(N^2) lines parsed).  A Runner reads each once, when constructed.
+    Each `run` then appends the unit's row, its manifest record (if not
+    already recorded) and its events, and reads nothing:
+
+        with Runner(backend, render, score, out, cache=cache) as r:
+            row = r.run(unit)          # the unit's row, as written
+
+    `execute` is built on this class, so the resume, retry, cache, sidecar
+    and manifest semantics are one implementation.  A unit already done is
+    returned from the sink with no call.  A stale or errored one is
+    redone, and one finished under another `score_version` is re-scored
+    (see `plan`).  The event log gets one run_start when the Runner opens
+    and one run_end when it closes cleanly, with each unit's events
+    between.  A Runner left by an exception closes without a run_end, so
+    the log says the run was killed, as for `execute`.
+
+    Nothing between the call to `run` and the backend's call draws from a
+    global random generator (Python's, numpy's or torch's), so a caller
+    that seeds before each `run` gives the backend the state it seeded.
+
+    The rows of the sink are held in memory, so that a done unit's row is
+    returned without reading the file.  One caller thread: `workers`
+    parallelises within a `run_batch`, not across concurrent calls.
+    """
+
+    def __init__(self, backend: Backend, render: Render, score: Score,
+                 out: str | Path, *, cache: Cache | None = None,
+                 workers: int = 1, batch_size: int = 1, attempts: int = 5,
+                 resume: bool = True, retry_errors: bool = True,
+                 log_every: int = 25, events: bool = True,
+                 manifest: str | Path | bool = True,
+                 shard: tuple[int, int] | None = None,
+                 score_version: str | None = None,
+                 stream: TextIO = sys.stderr, _keep_rows: bool = True) -> None:
+        backend.identity()                # refuse before touching any file
+        self.backend, self.render, self.score = backend, render, score
+        self.out = Path(out)
+        self.cache, self.workers, self.batch_size = cache, workers, batch_size
+        self.attempts, self.resume = attempts, resume
+        self.retry_errors, self.log_every = retry_errors, log_every
+        self.events, self.score_version, self.stream = (events, score_version,
+                                                        stream)
+        self.mine: Callable[[str], bool] = lambda uid: True
+        if shard is not None:
+            si, sn = check_shard(shard)
+            self.mine = lambda uid: shard_of(uid, sn) == si
+        self.mpath = (None if manifest is False or manifest is None
+                      else manifest_path(self.out) if manifest is True
+                      else Path(manifest))
+        # the only reads: the sink and the manifest, once each
+        self.state = SinkState(self.out, keep_rows=_keep_rows)
+        self.planned: set[str] = ({r["unit_id"] for r in
+                                   _read_records(self.mpath)}
+                                  if self.mpath is not None else set())
+        self.keys: dict[str, str] = {}
+        self._content: dict[str, str] = {}
+        self.tally: Counter[str] = Counter()
+        self.ctx: _Context | None = None
+        self.closed = False
+
+    # -- the steps, in the order execute takes them --------------------------
+
+    def plan(self, units: Sequence[Unit]) -> Plan:
+        """The resume decisions for `units` against the sink as it stands
+        in memory (`plan`), without a call or a file read."""
+        p = _plan(list(units), self.backend, self.render, self.state,
+                  self.resume, self.retry_errors, self.score_version,
+                  self.batch_size, self._content)
+        self.keys.update(p.keys)
+        return p
+
+    def record(self, units: Iterable[Unit]) -> None:
+        """Append to the manifest the units it does not yet record (the
+        plan, before any call: see `write_manifest`)."""
+        if self.mpath is None:
+            return
+        units = list(units)
+        if self.mpath.exists() and all(u.id in self.planned for u in units):
+            return
+        self.mpath.parent.mkdir(parents=True, exist_ok=True)
+        with _MANIFEST_LOCK:
+            append_plan(self.mpath, units, self.planned)
+
+    def open(self, start: Mapping[str, Any] | None = None,
+             total: int | None = None) -> Runner:
+        """Open the sink and the event log for appending and emit
+        run_start.  `start` gives run_start's plan fields (`execute`
+        passes its plan's counts).  Without it the run_start says
+        `incremental=True`, since the units are not known in advance."""
+        if self.ctx is not None:
+            raise RuntimeError("Runner already open")
+        if self.closed:
+            raise RuntimeError("Runner closed: open a new one on the sink")
+        b, c, out = self.backend, self.cache, self.out
+        self.ctx = _Context(
+            b, self.render, self.score, self.keys, out,
+            SinkLog(out, self.state),
+            # sidecars live with the cache when there is one, so a cache hit
+            # in another run finds them, and otherwise beside the sink
+            ArrayStore(c.root / "arrays" if c and c.enabled
+                       else Path(str(out) + ".arrays")),
+            c, EventLog(events_path(out)) if self.events else None,
+            self.attempts, self.batch_size, total, self.log_every,
+            self.stream, score_version=self.score_version)
+        if start is None:
+            start = {"incremental": True}
+            if self.state.unreadable:
+                print(f"[run] WARNING {self.state.unreadable} unreadable "
+                      f"line(s) in {str(out)!r} (a write interrupted by a "
+                      f"crash?). Their units will be re-run", file=self.stream,
+                      flush=True)
+        self.ctx.emit("run_start", **start, workers=self.workers,
+                      batch_size=self.batch_size, backend=type(b).__name__,
+                      identity=digest(b.identity()), out=str(out))
+        return self
+
+    def rescore(self, p: Plan) -> None:
+        ctx = self._open_ctx()
+        for u in p.rescore:               # no call: score the stored response
+            row = _row(u, p.keys[u.id], _response_of(p.rows[u.id]), self.score,
+                       self.score_version, p.rows[u.id].get("batch_size"))
+            ctx.sink.write(row)
+            ctx.emit("rescore", unit_id=u.id, status=row["status"])
+
+    def call(self, todo: Sequence[Unit]) -> None:
+        """Call the backend for `todo`, in batches of `batch_size` over
+        `workers` threads, writing each unit's row as it comes back."""
+        ctx, bs = self._open_ctx(), max(1, self.batch_size)
+        batches = [todo[i:i + bs] for i in range(0, len(todo), bs)]
+        if self.workers <= 1:
+            for b in batches:
+                _batch(ctx, b)
+        else:
+            with ThreadPoolExecutor(max_workers=self.workers) as pool:
+                list(pool.map(lambda b: _batch(ctx, b), batches))
+
+    def close(self, killed: bool = False) -> None:
+        """Close the sink and the backend, then emit run_end and close the
+        event log -- unless `killed`, when the log is left without a
+        run_end, which is how it says the run did not finish."""
+        if self.closed:
+            return
+        self.closed = True
+        ctx = self.ctx
+        if ctx is None:
+            return
+        if killed and ctx.events is not None:
+            ctx.events.close()
+        try:
+            ctx.sink.close()
+        finally:
+            self.backend.close()
+        if not killed:
+            self._finish(ctx)
+
+    # -- the incremental interface ------------------------------------------
+
+    def run(self, unit: Unit) -> dict[str, Any]:
+        """The unit's row: from the sink if the unit is done, otherwise
+        made (by a call, or a re-score) and appended."""
+        return self.run_batch([unit])[0]
+
+    def run_batch(self, units: Iterable[Unit]) -> list[dict[str, Any]]:
+        """The rows of `units`, in order, as `run` makes each one, with
+        the calls batched by `batch_size` over `workers` threads."""
+        self._open_ctx()
+        if not self.state.keep_rows:
+            raise RuntimeError("this Runner does not hold the sink's rows")
+        units = list(units)
+        other = [u.id for u in units if not self.mine(u.id)]
+        if other:
+            raise ValueError(f"units {other[:3]} belong to another shard")
+        p = self.plan(units)
+        self.record(p.units)
+        self.tally.update(stale=p.stale, retried=p.retried,
+                          rescored=len(p.rescore),
+                          from_sink=p.done - len(p.rescore))
+        self.rescore(p)
+        self.call(p.todo)
+        # as the sink holds it (JSON), so the row equals what to_frame reads
+        return [json.loads(json.dumps(self.state.rows[u.id],
+                                      default=json_default))
+                for u in p.units]
+
+    def __enter__(self) -> Runner:
+        if self.ctx is None:
+            self.open()
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None,
+                 exc: BaseException | None, tb: object) -> None:
+        self.close(killed=exc_type is not None)
+
+    # -- internals -----------------------------------------------------------
+
+    def _open_ctx(self) -> _Context:
+        if self.ctx is None or self.closed:
+            raise RuntimeError("Runner not open: use `with Runner(...)` or "
+                               "call open()")
+        return self.ctx
+
+    def _finish(self, ctx: _Context) -> None:
+        el = time.perf_counter() - ctx.t0
+        c = ctx.cache
+        ctx.emit("run_end", units_done=ctx.n, errors=ctx.errors, elapsed_s=el,
+                 cache_hits=c.hits if c else None,
+                 cache_misses=c.misses if c else None)
+        if ctx.events is not None:
+            ctx.events.close()
+        cache_msg = f", cache {c.hits} hit / {c.misses} miss" if c else ""
+        print(f"[run] done: {ctx.n} units in {el / 60:.1f}m, {ctx.errors} "
+              f"errors{cache_msg}", file=self.stream, flush=True)
+        t = self.tally
+        if any(t.values()):
+            print(f"[run] also: {t['from_sink']} returned from the sink, "
+                  f"{t['rescored']} re-scored, {t['stale']} stale and "
+                  f"{t['retried']} errored units redone", file=self.stream,
+                  flush=True)
+        if self.mpath is not None:
+            # Against the manifest, not this invocation's units: a narrowed
+            # resume (a `limit=`, one condition re-run) is exactly the case
+            # where the shortfall is invisible from the call site.  Under a
+            # shard, only this shard's units: the others are other
+            # processes' work, not this one's shortfall.
+            never = len({u for u in self.planned if self.mine(u)}
+                        - self.state.seen.keys())
+            if never:
+                print(f"[run] WARNING {never} planned units were never "
+                      f"attempted. Pass manifest={str(self.mpath)!r} to "
+                      f"attrition()", file=self.stream, flush=True)
+
+
 def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Score,
         out: str | Path, *, cache: Cache | None = None, workers: int = 8,
         batch_size: int = 1, attempts: int = 5, resume: bool = True,
@@ -453,81 +717,26 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
 
     `score_version` names the scorer: rows record it, and a finished row
     scored under another one is re-scored without a call (see `plan`).
+
+    One call reads the whole sink and manifest.  A caller that executes
+    one unit at a time should hold a `Runner` open instead.
     """
-    backend.identity()                    # refuse before touching any file
-    out = Path(out)
     everything = list(units)[:limit]
-    mine: Callable[[str], bool] = lambda uid: True    # noqa: E731
-    if shard is not None:
-        si, sn = check_shard(shard)
-        mine = lambda uid: shard_of(uid, sn) == si    # noqa: E731
-    p = plan([u for u in everything if mine(u.id)], backend, render, out,
-             resume, retry_errors, score_version=score_version,
-             batch_size=batch_size)
-    mpath = (None if manifest is False or manifest is None
-             else manifest_path(out) if manifest is True else Path(manifest))
-    if mpath is not None:
-        write_manifest(everything, mpath)     # intent, before any execution
-    _report_plan(p, out, stream)
-    ctx = _Context(
-        backend, render, score, p.keys, out, JsonlSink(out),
-        # sidecars live with the cache when there is one, so a cache hit in
-        # another run finds them, and otherwise beside the sink
-        ArrayStore(cache.root / "arrays" if cache and cache.enabled
-                   else Path(str(out) + ".arrays")),
-        cache, EventLog(events_path(out)) if events else None,
-        attempts, batch_size, len(p.todo), log_every, stream,
-        score_version=score_version)
-    ctx.emit("run_start", n_units=len(p.units), to_go=len(p.todo), done=p.done,
-             stale=p.stale, retried=p.retried, workers=workers,
-             batch_size=batch_size, backend=type(backend).__name__,
-             identity=digest(backend.identity()), out=str(out))
-    for u in p.rescore:                   # no call: score the stored response
-        row = _row(u, p.keys[u.id], _response_of(p.rows[u.id]), score,
-                   score_version, p.rows[u.id].get("batch_size"))
-        ctx.sink.write(row)
-        ctx.emit("rescore", unit_id=u.id, status=row["status"])
-    batches = [p.todo[i:i + max(1, batch_size)]
-               for i in range(0, len(p.todo), max(1, batch_size))]
+    r = Runner(backend, render, score, out, cache=cache, workers=workers,
+               batch_size=batch_size, attempts=attempts, resume=resume,
+               retry_errors=retry_errors, log_every=log_every, events=events,
+               manifest=manifest, shard=shard, score_version=score_version,
+               stream=stream, _keep_rows=score_version is not None)
+    p = r.plan([u for u in everything if r.mine(u.id)])
+    r.record(everything)                  # intent, before any execution
+    _report_plan(p, r.out, stream)
+    r.open({"n_units": len(p.units), "to_go": len(p.todo), "done": p.done,
+            "stale": p.stale, "retried": p.retried}, total=len(p.todo))
     try:
-        if workers <= 1:
-            for b in batches:
-                _batch(ctx, b)
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                list(pool.map(lambda b: _batch(ctx, b), batches))
+        r.rescore(p)
+        r.call(p.todo)
     except BaseException:
-        if ctx.events is not None:        # no run_end: the log says "killed"
-            ctx.events.close()
+        r.close(killed=True)
         raise
-    finally:
-        ctx.sink.close()
-        backend.close()
-    _finish(ctx, mpath, mine)
-    return to_frame(out)
-
-
-def _finish(ctx: _Context, mpath: Path | None,
-            mine: Callable[[str], bool]) -> None:
-    el = time.perf_counter() - ctx.t0
-    c = ctx.cache
-    ctx.emit("run_end", units_done=ctx.n, errors=ctx.errors, elapsed_s=el,
-             cache_hits=c.hits if c else None,
-             cache_misses=c.misses if c else None)
-    if ctx.events is not None:
-        ctx.events.close()
-    cache_msg = f", cache {c.hits} hit / {c.misses} miss" if c else ""
-    print(f"[run] done: {ctx.n} units in {el / 60:.1f}m, {ctx.errors} "
-          f"errors{cache_msg}", file=ctx.stream, flush=True)
-    if mpath is not None:
-        # Against the manifest, not this invocation's units: a narrowed
-        # resume (a `limit=`, one condition re-run) is exactly the case where the
-        # shortfall is invisible from the call site.
-        # Under a shard, only this shard's units: the others are other
-        # processes' work, not this one's shortfall.
-        never = len({r["unit_id"] for r in _read_records(mpath)
-                     if mine(r["unit_id"])} - ctx.sink.seen.keys())
-        if never:
-            print(f"[run] WARNING {never} planned units were never attempted. "
-                  f"Pass manifest={str(mpath)!r} to attrition()",
-                  file=ctx.stream, flush=True)
+    r.close()
+    return to_frame(r.out)

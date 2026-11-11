@@ -4,7 +4,9 @@ Every `execute()` appends events to `<sink>.events.jsonl`, one JSON object per
 line, each with a wall-clock time `t` (ISO 8601, UTC) and `event`:
 
     run_start   plan size, what resume decided (done / stale / retried),
-                settings, backend identity digest
+                settings, backend identity digest.  A `Runner`, which is
+                given its units one call at a time, writes
+                `incremental: true` instead of the plan fields
     unit        one per finished unit: status, latency, tokens, cached,
                 error (first 300 chars)
     retry       one per retried attempt: unit, attempt, wait, reason
@@ -105,8 +107,8 @@ def summarize_events(path: str | Path, prices: Mapping[str, float] | None = None
         runs.append({"started": lo.isoformat(), "ended": bool(len(e)),
                      "last_event": last.isoformat(),
                      "elapsed_s": float((last - lo).total_seconds()),
-                     "planned": int(s.get("n_units", 0) or 0),
-                     "to_go": int(s.get("to_go", 0) or 0),
+                     "planned": _count(s.get("n_units")),
+                     "to_go": _count(s.get("to_go")),
                      "units_done": len(u)})
     out["runs"] = runs
     out["killed_runs"] = sum(not r["ended"] for r in runs)
@@ -155,6 +157,13 @@ def summarize_events(path: str | Path, prices: Mapping[str, float] | None = None
                           "by_kind": retries["reason"].map(error_kind)
                           .value_counts().head(5).to_dict()}
     return out
+
+
+def _count(v: Any) -> int | None:
+    """A run_start count, or None where the run did not know it in advance
+    (a Runner's run_start has no plan fields, read as NaN in a frame that
+    also holds an execute's)."""
+    return None if v is None or pd.isna(v) else int(v)
 
 
 def parse_log(path: str | Path, patterns: Mapping[str, str],
@@ -212,7 +221,9 @@ def format_summary(s: Mapping[str, Any]) -> str:
     lines = []
     for k, r in enumerate(s.get("runs", []), 1):
         state = "finished" if r["ended"] else "NO run_end (killed or still running)"
-        lines.append(f"run {k}: {r['started']}  {r['units_done']}/{r['to_go']} "
+        done = (f"{r['units_done']}" if r["to_go"] is None
+                else f"{r['units_done']}/{r['to_go']}")
+        lines.append(f"run {k}: {r['started']}  {done} "
                      f"units in {r['elapsed_s'] / 60:.1f} min  [{state}]")
     if "status_counts" in s:
         lines.append("status: " + ", ".join(f"{k} {v}" for k, v in

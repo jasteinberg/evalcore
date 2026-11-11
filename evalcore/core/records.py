@@ -139,16 +139,18 @@ class AppendLog:
             self.fd = -1
 
 
-class JsonlSink(SinkState, AppendLog):
-    """The run's sink: an AppendLog that keeps its SinkState current as rows
-    are written."""
+class SinkLog(AppendLog):
+    """The run's sink: an AppendLog that keeps a SinkState current as rows
+    are written, so resume decisions after the first read never read the
+    file again.  Build the state before this log: the state's read counts
+    a crash fragment that opening the log then terminates."""
 
-    def __init__(self, path: str | Path) -> None:
-        SinkState.__init__(self, path)      # read before the fragment is closed
+    def __init__(self, path: str | Path, state: SinkState) -> None:
+        self.state = state
         AppendLog.__init__(self, path)
 
     def _written(self, rec: Mapping[str, Any]) -> None:
-        self.note(rec)
+        self.state.note(rec)
 
 
 def _terminate_partial_line(path: Path) -> bool:
@@ -223,15 +225,22 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _MANIFEST_LOCK:                  # serialises this process's threads
-        have = {r["unit_id"] for r in _read_records(path)}
-        _terminate_partial_line(path)
-        fresh = []
-        for u in units:
-            if u.id not in have:
-                have.add(u.id)
-                fresh.append(u.row())
-        _append_records(path, fresh)
+        append_plan(path, units, {r["unit_id"] for r in _read_records(path)})
     return path
+
+
+def append_plan(path: Path, units: Iterable[Unit], have: set[str]) -> None:
+    """Append the units whose ids are not in `have` to the manifest at
+    `path`, adding their ids to `have`, then fsync.  `have` is what the
+    manifest already records: `write_manifest` reads it from the file, a
+    `Runner` holds it in memory.  The caller holds `_MANIFEST_LOCK`."""
+    _terminate_partial_line(path)
+    fresh = []
+    for u in units:
+        if u.id not in have:
+            have.add(u.id)
+            fresh.append(u.row())
+    _append_records(path, fresh)
 
 
 def _append_records(path: Path, recs: Sequence[Mapping[str, Any]]) -> None:

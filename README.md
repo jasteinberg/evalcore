@@ -162,7 +162,7 @@ locally.
 | `backends/cache.py` | `Cache`: one JSON file per request key |
 | `backends/echo.py`, `function.py` | `EchoBackend`, `FunctionBackend`: offline and user-supplied models |
 | `backends/check.py` | `check_backend`: a conformance check for a backend you write |
-| `runner.py` | `plan()` and `execute()`: resume, batching, status, scoring |
+| `runner.py` | `plan()`, `execute()` and `Runner`: resume, batching, status, scoring |
 | `records.py` | the JSONL sink, the plan manifest, `.npz` array sidecars, `to_frame` |
 | `shards.py` | one sweep split across processes (a SLURM array, several machines), and the merge |
 | `events.py` | the run's event log, `summarize_events`, `parse_log` for foreign logs |
@@ -436,6 +436,30 @@ pairs, the correlation ρ of their errors and the panel's effective number
 of judges n/(1 + (n − 1)ρ̄). `tasks.judge_calibration` writes answers whose
 correctness is known by construction (hedges, self-corrections, near-name
 distractors) to measure judges on.
+
+## Sequential callers
+
+`execute` takes its units as a batch and reads the whole sink and manifest
+at each call. A caller whose next unit depends on the previous unit's
+output (a multi-turn simulation, an agent outside the harness) must call it
+once per unit, and N such calls into one sink parse O(N^2) lines. A
+`Runner` held open reads the sink and the manifest once, keeps their state
+in memory, and per unit appends one row, one manifest record and the
+unit's events:
+
+```python
+with Runner(backend, render, score, "runs/x.jsonl", cache=cache) as r:
+    row = r.run(unit)            # the unit's row, as written to the sink
+    rows = r.run_batch(units)    # several at once, batched as in execute
+```
+
+`execute` is built on `Runner`, so the resume, retry, cache, sidecar and
+manifest semantics are the same: a unit already done is returned from the
+sink without a call, and the rows written are identical to those of one
+`execute` call per unit. The event log gets one `run_start` and one
+`run_end` per Runner rather than per unit. Nothing between `run` and the
+backend's call draws from a global random generator, so a caller that
+seeds before each `run` gives the backend that seed's state.
 
 ## Sharding
 

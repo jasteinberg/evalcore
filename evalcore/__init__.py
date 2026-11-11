@@ -15,7 +15,8 @@ The package in three layers, each importable on its own:
     backends/    Request/Response, the Backend contract, HTTP (three
                  providers), local HF (teacher forcing, candidate scoring,
                  probes), the cache, conformance checks
-    runner       plan() then execute(): resume decisions, retries, rows, status
+    runner       plan() then execute(), or a Runner held open: resume decisions,
+                 retries, rows, status
     records      the append-only sink, plan manifest, array sidecars
     shards       split a sweep across processes (SLURM arrays), merge
     events       the run's event log: read, summarise, parse foreign logs
@@ -82,7 +83,7 @@ from .core.records import (
     to_frame,
     write_manifest,
 )
-from .core.runner import ParseFailure, execute, plan
+from .core.runner import ParseFailure, Runner, execute, plan
 from .core.search import (
     BM25,
     CorpusSearch,
@@ -161,7 +162,7 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     "ann_recall", "search_tool", "rank_metrics", "score_ranked",
     "retrieval_summary",
     # running and records
-    "plan", "execute", "ParseFailure", "calibrate", "derive",
+    "plan", "execute", "Runner", "ParseFailure", "calibrate", "derive",
     "to_frame", "load_arrays", "manifest_path", "read_manifest",
     "write_manifest", "shard_path", "shard_from_env", "merge_shards",
     # events

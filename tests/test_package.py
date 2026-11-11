@@ -29,7 +29,7 @@ PUBLIC = {
     "RetrieverBackend", "Reranker", "FunctionScorer", "HFCrossEncoder",
     "ann_recall", "search_tool", "rank_metrics", "score_ranked",
     "retrieval_summary",
-    "plan", "execute", "ParseFailure", "calibrate", "derive",
+    "plan", "execute", "Runner", "ParseFailure", "calibrate", "derive",
     "to_frame", "load_arrays", "manifest_path", "read_manifest",
     "write_manifest", "shard_path", "shard_from_env", "merge_shards",
     "read_events", "summarize_events", "format_summary", "parse_log",
