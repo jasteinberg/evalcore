@@ -37,10 +37,12 @@ def search_cfg(tmp_path) -> dict:
             "tags": {"note": "attrition"}}
 
 
-def test_every_default_is_written_out_nested_specs_included(tmp_path):
+def test_every_default_is_written_out_nested_specs_included(tmp_path,
+                                                            monkeypatch):
     """By hand from the signatures: search_qa(n_towns, seed=0, k=3),
     http(..., base_url=None, timeout=120.0), bm25(k1=1.2, b=0.75),
     AgentBackend(max_turns=8, max_tool_calls=16)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")       # built, never called
     c = from_config(search_cfg(tmp_path)).config
     assert c["task"] == {"type": "search_qa", "n_towns": 4, "seed": 0, "k": 3}
     assert c["backend"]["base_url"] is None
@@ -55,7 +57,8 @@ def test_every_default_is_written_out_nested_specs_included(tmp_path):
     assert c["tags"] == {"note": "attrition"}
 
 
-def test_a_resolved_config_rebuilds_the_same_job(tmp_path):
+def test_a_resolved_config_rebuilds_the_same_job(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")       # built, never called
     exp = from_config(search_cfg(tmp_path))
     again = from_config(exp.config)
     assert again.job_hash() == exp.job_hash()

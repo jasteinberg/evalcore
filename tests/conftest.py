@@ -24,6 +24,18 @@ from evalcore.testing import assert_same, to_plain
 GOLDEN = Path(__file__).resolve().parent / "golden"
 
 
+@pytest.fixture(autouse=True)
+def no_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every provider key read by the package, removed for every test.  CI
+    has none, so a test that needs one passes on a developer's machine and
+    fails there.  Without them, no test can reach a paid API.  A test that
+    builds an HTTP backend sets a dummy key itself."""
+    from evalcore.core.backends.http import HTTPBackend
+    from evalcore.core.embed import HTTPEmbedder
+    for name in {*HTTPBackend.ENV.values(), *HTTPEmbedder.ENV.values()}:
+        monkeypatch.delenv(name, raising=False)
+
+
 def pytest_addoption(parser):
     parser.addoption("--update-golden", action="store_true",
                      help="rewrite tests/golden snapshots instead of comparing")
