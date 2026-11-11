@@ -342,12 +342,19 @@ rho=0.6, DEFF=4; at k=40, N=240 rows and n_eff=60; 1000 datasets per k):
 | 20 | 0.92 | 0.64 |
 | 40 | 0.94 | 0.67 |
 
-The row bootstrap's interval is too narrow by `sqrt(DEFF)` at every k, so
-it settles at `2 Phi(1.96/sqrt(DEFF)) - 1 = 0.673`, not at 0.95. The
-cluster bootstrap needs enough clusters to see their spread. With few, its
-interval is too narrow too, and `summarize` flags any cell below 20
-clusters. `python scripts/coverage_figure.py --out docs/coverage.png`
-regenerates the figure, and its table goes beside it as a CSV.
+The row bootstrap treats the N rows as independent, so its standard error
+is too small by a factor `sqrt(DEFF)` at every k, and its coverage tends to
+`2 Phi(1.96/sqrt(DEFF)) - 1 = 0.673` as k grows, not to 0.95.
+
+The cluster bootstrap estimates the between-cluster variance from the k
+observed clusters. Its variance estimate carries the plug-in factor
+`(k-1)/k`, and its quantiles do not account for the uncertainty in that
+estimate (the gap between `t_{k-1}` and normal quantiles), so at small k
+the interval under-covers. `summarize` flags any cell with fewer than 20
+clusters.
+
+`python scripts/coverage_figure.py --out docs/coverage.png` regenerates
+the figure and writes the table beside it as a CSV.
 
 ## Retrieval
 
