@@ -127,6 +127,8 @@ OPENAI_SENT = frozenset({"temperature", "top_p", "seed", "logprobs",
                          "top_logprobs", "stop", "max_tokens", "tool_choice"})
 GEMINI_SENT = frozenset({"temperature", "top_p", "max_tokens", "stop",
                          "tool_choice"})
+# vLLM's OpenAI-compatible server also reads its own sampling params
+VLLM_SENT = OPENAI_SENT | {"top_k", "min_p", "repetition_penalty"}
 
 
 def _anthropic_adapter(model: str, messages: Sequence[Message],
@@ -192,7 +194,26 @@ def _openai_adapter(model: str, messages: Sequence[Message],
                     params: Mapping[str, Any],
                     tools: Sequence[ToolSpec] | None = None
                     ) -> tuple[str, JSONDict]:
-    refuse_unread(params, OPENAI_SENT, "openai adapter")
+    return _chat_completions(model, messages, params, tools, OPENAI_SENT,
+                             "max_completion_tokens", "openai adapter")
+
+
+def _vllm_adapter(model: str, messages: Sequence[Message],
+                  params: Mapping[str, Any],
+                  tools: Sequence[ToolSpec] | None = None
+                  ) -> tuple[str, JSONDict]:
+    """OpenAI Chat Completions as vLLM serves it, with its extra sampling
+    params.  The budget goes as `max_tokens`, which every vLLM release
+    reads (`max_completion_tokens` only the newer ones)."""
+    return _chat_completions(model, messages, params, tools, VLLM_SENT,
+                             "max_tokens", "vllm adapter")
+
+
+def _chat_completions(model: str, messages: Sequence[Message],
+                      params: Mapping[str, Any],
+                      tools: Sequence[ToolSpec] | None, sent: frozenset[str],
+                      budget: str, who: str) -> tuple[str, JSONDict]:
+    refuse_unread(params, sent, who)
     msgs: list[JSONDict] = []
     for m in messages:
         if m["role"] == "tool":
@@ -216,19 +237,19 @@ def _openai_adapter(model: str, messages: Sequence[Message],
                                        "description": t["description"],
                                        "parameters": t["parameters"]}}
                          for t in tools]
-    forced = _forced_tool(params, tools, "openai adapter")
+    forced = _forced_tool(params, tools, who)
     if forced is not None:
         body["tool_choice"] = {"type": "function",
                                "function": {"name": forced}}
-    body |= {k: params[k] for k in sorted(OPENAI_SENT
-                                          - {"max_tokens", "tool_choice"})
+    body |= {k: params[k] for k in sorted(sent - {"max_tokens", "tool_choice"})
              if k in params}
-    # `max_tokens` is deprecated in Chat Completions and rejected by newer
-    # models (found live, 2 Oct).  `max_completion_tokens` replaces it.  It
-    # also counts reasoning tokens, so on a reasoning model a small budget
-    # can be spent before any visible text -- the row is then `truncated`.
+    # OpenAI: `max_tokens` is deprecated in Chat Completions and rejected by
+    # newer models (found live, 2 Oct).  `max_completion_tokens` replaces
+    # it.  It also counts reasoning tokens, so on a reasoning model a small
+    # budget can be spent before any visible text -- the row is then
+    # `truncated`.
     if "max_tokens" in params:
-        body["max_completion_tokens"] = params["max_tokens"]
+        body[budget] = params["max_tokens"]
     return "/v1/chat/completions", body
 
 
@@ -388,7 +409,8 @@ def _retry_after(r: httpx.Response) -> float | None:
 
 ADAPTERS = {"anthropic": (_anthropic_adapter, _anthropic_parse),
             "openai": (_openai_adapter, _openai_parse),
-            "gemini": (_gemini_adapter, _gemini_parse)}
+            "gemini": (_gemini_adapter, _gemini_parse),
+            "vllm": (_vllm_adapter, _openai_parse)}
 
 
 class HTTPBackend(Backend):
@@ -404,7 +426,8 @@ class HTTPBackend(Backend):
                               "gemini": "https://generativelanguage.googleapis.com"})
     ENV = MappingProxyType({"anthropic": "ANTHROPIC_API_KEY",
                             "openai": "OPENAI_API_KEY",
-                            "gemini": "GEMINI_API_KEY"})
+                            "gemini": "GEMINI_API_KEY",
+                            "vllm": "VLLM_API_KEY"})
 
     def __init__(self, flavour: str = "anthropic", api_key: str | None = None,
                  base_url: str | None = None, timeout: float = 120.0,
@@ -413,12 +436,19 @@ class HTTPBackend(Backend):
         import httpx
         if flavour not in ADAPTERS:
             raise ValueError(f"flavour must be one of {sorted(ADAPTERS)}")
+        if flavour == "vllm" and self.name != "vllm":
+            raise ValueError("flavour 'vllm' is VLLMBackend's: it keys on the "
+                             "weights served, not on the URL")
         env = self.ENV[flavour]
         key = api_key or os.environ.get(env)
-        if not key:
-            raise Fatal(f"no API key: set ${env}")
         headers = {"content-type": "application/json"}
-        if flavour == "anthropic":
+        if flavour == "vllm":
+            # a vLLM server started without --api-key reads no key
+            if key:
+                headers |= {"authorization": f"Bearer {key}"}
+        elif not key:
+            raise Fatal(f"no API key: set ${env}")
+        elif flavour == "anthropic":
             headers |= {"x-api-key": key, "anthropic-version": "2023-06-01"}
         elif flavour == "gemini":
             headers |= {"x-goog-api-key": key}
@@ -426,6 +456,8 @@ class HTTPBackend(Backend):
             headers |= {"authorization": f"Bearer {key}"}
         headers |= dict(extra_headers or {})
         self.flavour = flavour
+        if base_url is None and flavour not in self.BASES:
+            raise ValueError(f"flavour {flavour!r} needs a base_url")
         self.base_url = base_url or self.BASES[flavour]
         self.default_params = dict(default_params or {})
         self.adapt, self.parse = ADAPTERS[flavour]
@@ -476,6 +508,78 @@ class HTTPBackend(Backend):
 
     def close(self) -> None:
         self.client.close()
+
+
+class VLLMBackend(HTTPBackend):
+    """A model served by vLLM's OpenAI-compatible server (`vllm serve`).
+
+    The request key holds what is served, not where.  A cluster gives the
+    server a new address on every launch (a pod IP, a node name), and
+    keying on the URL would discard the cache each time.  The identity is
+    instead the server's own account of its models (`GET /v1/models`: each
+    served name, the weights it was loaded from, its context length), read
+    once when `identity()` is first called, which `execute` does before
+    touching any file.  An unreachable server is refused there.
+
+    `revision` names the weights' revision (a git commit of the model
+    repository, a checkpoint step).  vLLM does not report it, so two
+    revisions of one repository are one identity unless it is given.  It
+    has no default: pass None to state that the weights are fixed by their
+    path alone.
+
+    Greedy decoding is not bitwise reproducible across runs: vLLM batches
+    concurrent requests together, and the kernels' reduction order depends
+    on the batch.  The cache makes the first response canonical."""
+
+    name = "vllm"
+
+    def __init__(self, base_url: str, *, revision: str | None,
+                 api_key: str | None = None, timeout: float = 120.0,
+                 extra_headers: Mapping[str, str] | None = None,
+                 default_params: Mapping[str, Any] | None = None) -> None:
+        super().__init__("vllm", api_key=api_key, base_url=base_url,
+                         timeout=timeout, extra_headers=extra_headers,
+                         default_params=default_params)
+        self.revision = revision
+        self._served: list[dict[str, Any]] | None = None
+
+    def served(self) -> list[dict[str, Any]]:
+        """The server's models (`GET /v1/models`), read once: name, the
+        weights it loaded (`root`), the base of an adapter (`parent`) and
+        the context length, sorted by name."""
+        import httpx
+        with self._client_lock:
+            if self._served is not None:
+                return self._served
+        try:
+            r = self._http().get("/v1/models")
+        except httpx.HTTPError as exc:
+            raise Fatal(f"vLLM server at {self.base_url} unreachable: "
+                        f"{exc}") from exc
+        _raise_for_status(r)
+        models = sorted(({"id": m["id"], "root": m.get("root"),
+                          "parent": m.get("parent"),
+                          "max_model_len": m.get("max_model_len")}
+                         for m in r.json()["data"]), key=lambda m: m["id"])
+        if not models:
+            raise Fatal(f"vLLM server at {self.base_url} serves no model")
+        with self._client_lock:
+            self._served = models
+        return models
+
+    def identity(self) -> dict[str, Any]:
+        return {**self._base_identity(), "served": self.served(),
+                "revision": self.revision}
+
+    def refusal(self, req: Request) -> str | None:
+        base = super().refusal(req)
+        if base is not None:
+            return base
+        model = merge_params(self.default_params, req.params).get("model")
+        names = [m["id"] for m in self.served()]
+        if model not in names:
+            return f"model {model!r} is not served here (serving {names})"
+        return None
 
 
 def _raise_for_status(r: Any) -> None:

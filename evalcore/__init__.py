@@ -65,6 +65,7 @@ from .core.backends import (
     Request,
     Response,
     Transient,
+    VLLMBackend,
     check_backend,
     with_retries,
 )
@@ -97,7 +98,7 @@ from .core.search import (
     ann_recall,
     search_tool,
 )
-from .core.shards import merge_shards, shard_from_env, shard_path
+from .core.shards import merge_shards, shard_from_env, shard_from_k8s, shard_path
 from .core.spec import Cell, Item, Unit, canonical, digest, grid, units
 from .core.tools import Tool, ToolContext, ToolInputError, ToolUnavailable
 from .evaluation.attrition import attrition
@@ -150,7 +151,7 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     "Cell", "Item", "Unit", "grid", "units", "digest", "canonical",
     # backends
     "Backend", "Request", "Response", "Transient", "Fatal", "DECODE_KEYS",
-    "HTTPBackend", "HFBackend", "EchoBackend", "FunctionBackend",
+    "HTTPBackend", "VLLMBackend", "HFBackend", "EchoBackend", "FunctionBackend",
     "AgentBackend", "Probe", "FunctionProbe", "Cache", "check_backend",
     "CheckReport", "with_retries",
     # tools
@@ -164,7 +165,7 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     # running and records
     "plan", "execute", "Runner", "ParseFailure", "calibrate", "derive",
     "to_frame", "load_arrays", "manifest_path", "read_manifest",
-    "write_manifest", "shard_path", "shard_from_env", "merge_shards",
+    "write_manifest", "shard_path", "shard_from_env", "shard_from_k8s", "merge_shards",
     # events
     "read_events", "summarize_events", "format_summary", "parse_log",
     # tasks

@@ -21,7 +21,8 @@ against its signature.  `python -m evalcore list` prints every registered
 name with its keys.  The built-ins:
 
   task      file (path, name, mapping, corpus), arithmetic, log_qa, search_qa
-  backend   http (flavour, default_params, base_url, timeout), hf (model,
+  backend   http (flavour, default_params, base_url, timeout), vllm
+            (base_url, revision, default_params, timeout), hf (model,
             revision, dtype, device, generate, default_params), echo,
             retriever (retriever, k)
   score     graded (the items' graders, the default), ranked (ks),
@@ -74,7 +75,13 @@ from typing import Any, cast
 
 from . import analyses as an
 from .core.agent import AgentBackend
-from .core.backends import Backend, EchoBackend, HFBackend, HTTPBackend
+from .core.backends import (
+    Backend,
+    EchoBackend,
+    HFBackend,
+    HTTPBackend,
+    VLLMBackend,
+)
 from .core.embed import Embedder, EmbeddingCache, HFEmbedder, HTTPEmbedder
 from .core.search import (
     BM25,
@@ -176,6 +183,17 @@ def _http(flavour: str, default_params: Mapping[str, Any] | None = None,
           base_url: str | None = None, timeout: float = 120.0) -> Backend:
     """API key from the environment ($ANTHROPIC_API_KEY, ...)."""
     return HTTPBackend(flavour, base_url=base_url, timeout=timeout,
+                       default_params=default_params)
+
+
+@register("backend", "vllm")
+def _vllm(base_url: str, revision: str | None,
+          default_params: Mapping[str, Any] | None = None,
+          timeout: float = 120.0) -> Backend:
+    """A vLLM server.  `revision` is required (null states that the weights
+    are fixed by their path).  API key, if the server wants one, from
+    $VLLM_API_KEY."""
+    return VLLMBackend(base_url, revision=revision, timeout=timeout,
                        default_params=default_params)
 
 
