@@ -60,6 +60,83 @@ arguments:
  "options": {"prices": {"in": 1.0, "out": 5.0}, "max_cost": 2.0}}
 ```
 
+## How the pieces fit
+
+There are four entry points, each a layer over the one below it:
+
+| entry point | module | adds to the layer below |
+|---|---|---|
+| `execute(units, backend, render, score, out)` | `core/runner.py` | (the loop itself) one row per unit, the cache, resume, row statuses, the manifest |
+| `task.run(cells, backend, out)` | `tasks/base.py` | the task's own `render` and `score` |
+| `Experiment(task, backend, cells, out).run()` | `pipeline.py` | calibration, the cost check, analysis and the report, around the loop |
+| `from_config("x.json")`, `python -m evalcore run x.json` | `config.py` | the `Experiment` built from JSON |
+
+`Experiment.run()` does not call `execute` by name. It calls the stage
+fields in the order of `Experiment.STAGES`, and the field `execute` holds
+the function `execute_stage` (in `pipeline.py`) by default. That function
+calls `core.runner.execute` with the task's `render` and `score`, the
+`RunOptions`, and the worker count and batch size from calibration. The
+scripts in `examples/` call `execute` directly, so that each step is
+visible. They skip calibration, the cost check and the report.
+
+### Configs and defaults
+
+A config names each component by `type`. The names are those registered
+in `registry.py`, and `python -m evalcore list` prints every one with its
+arguments and their defaults:
+
+```
+task:
+  log_qa(n_traces=50, fmt='log', n_spans=20, max_depth=3, ..., seed=0, p_error=0.15, p_retry=0.6)
+  search_qa(n_towns=20, seed=0, k=3)
+backend:
+  http(flavour, default_params=None, base_url=None, timeout=120.0)
+  vllm(base_url, revision, default_params=None, timeout=120.0)
+```
+
+The built-in task names are registered in `config.py`, each on a function
+in `tasks/`:
+
+| config `type` | function | module |
+|---|---|---|
+| `file` | `Task.from_file`: a JSONL task file, with an optional field `mapping` | `tasks/base.py` |
+| `arithmetic` | `arithmetic_task` | `tasks/arithmetic.py` |
+| `log_qa` | `log_qa_task` | `tasks/log_qa.py` |
+| `search_qa` | `search_qa` | `tasks/search_qa.py` |
+
+A new module in `tasks/` has no config name until a `register("task",
+...)` call gives it one, in `config.py` or in a plugin (see Your
+components in a config). [docs/custom-task.md](docs/custom-task.md) builds
+a task step by step: a JSONL file, a function, a registered name, a custom
+render and grader, and a built-in task.
+
+An argument without a default is required, and a key the factory does not
+take is refused by name. A config therefore states only what differs from
+the defaults. `from_config` writes the resolved config to
+`<out>.config.json`, with every default filled in, nested specs included.
+The resolved config is itself a valid config and rebuilds the same job.
+For the five-key config
+
+```json
+{"out": "runs/log_qa.jsonl", "task": {"type": "log_qa", "n_traces": 3},
+ "backend": {"type": "echo"}, "grid": {"model": ["echo"]}, "metric": "correct"}
+```
+
+the resolved config adds the task's eight other arguments (`fmt`,
+`n_spans`, `seed`, ...), the backend's `latency`, `"repeats": 1`,
+`"tags": {}` and the fifteen fields of `options`.
+
+A request parameter such as `max_tokens` can be set in two places:
+
+- **`backend.default_params`** applies to every request the backend sends.
+  It is part of the backend's identity, so changing it re-runs every unit.
+- **A grid axis**, `"grid": {"model": [...], "max_tokens": [256, 1024]}`,
+  varies it across cells and records it as a column in every row.
+
+A value in the request overrides the backend's default. No backend
+supplies one of its own: a request to Anthropic with no `max_tokens` from
+either place is not sent, and its row is an `error` that names both places.
+
 ## Types of Experiments
 
 Each kind of experiment is a choice of what the `Request` carries and
@@ -271,11 +348,11 @@ locally.
 
 | module | contents |
 |---|---|
-| `pipeline.py` | `Experiment`: the stages in order, each replaceable |
+| `pipeline.py` | `Experiment`: the stages in order, each replaceable. The execute stage calls `core.runner.execute` |
 | `analyses.py` | what the analyse stage computes: any function of the frame |
 | `registry.py` | named factories for every component kind, yours included |
 | `config.py` | an `Experiment` from JSON, built through the registry |
-| `__main__.py` | the command line: `run`, `summarize`, `list` |
+| `__main__.py` | the command line: `run`, `merge`, `summarize`, `list` |
 | `testing.py` | `assert_same`: two results that must agree, compared with a stated tolerance. The golden snapshots use it |
 
 ## Extension points
@@ -647,6 +724,7 @@ identifies the code of a vendored copy with no git.
 | `examples/probe_example.py` | steering inside a tiny random-init Qwen2, swept over a scale: candidate scoring, activation capture to sidecars, `value_curves` |
 | `examples/agent_example.py` | a scripted tool-calling model under `AgentBackend`, reaching every episode outcome, with `attrition` |
 | `scripts/preflight.py` | checks an API endpoint before a sweep: auth, request shape, truncation, latency, rate-limit headers |
+| `docs/custom-task.md` | writing a task: a JSONL file, a function, a registered name, a custom render and grader, a built-in task. `tests/test_custom_task_doc.py` runs every file it shows |
 | `GLOSSARY.md` | the vocabulary, and the terms that collide |
 | `tests/golden/` | snapshots of end-to-end outputs. `make snapshots` rewrites them for review |
 | `.githooks/pre-commit` | `make hooks` enables it: blocks a commit that changes library code without a test change, or fails `make check` |
