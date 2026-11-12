@@ -23,6 +23,7 @@ http = ["httpx"]
 # floor = the oldest transformers CI tests (the "full" job's matrix); no cap
 hf = ["torch", "transformers>=4.57"]
 retrieval = ["faiss-cpu"]
+ray = ["ray"]
 dev = ["pytest", "ruff", "mypy"]
 
 [tool.setuptools.packages.find]
@@ -70,3 +71,10 @@ no_implicit_optional = true
 # libraries that ship no type information
 module = ["pandas.*", "scipy.*", "matplotlib.*", "transformers.*", "faiss.*", "torch.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# optional (evalcore/ray_shards.py), and its partial annotations do not
+# describe actor handles: typed as Any whether or not it is installed
+module = ["ray", "ray.*"]
+ignore_missing_imports = true
+follow_imports = "skip"

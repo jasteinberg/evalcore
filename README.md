@@ -573,6 +573,26 @@ Kubernetes does not expose to the pod. Every launcher needs a file system
 that all shards and the merge can read: the sinks are appended to and the
 cache writes by rename, neither of which object storage (S3, GCS) supports.
 
+On a Ray cluster, `run_on_ray` (`evalcore.ray_shards`, with the `ray`
+extra) runs the shards over a pool of actors and then merges:
+
+```python
+from functools import partial
+from evalcore import from_config
+from evalcore.ray_shards import run_on_ray
+
+run_on_ray(partial(from_config, "config.json"), n_shards=256, actors=16,
+           num_gpus=1)
+```
+
+Each actor builds the experiment once, so a local model is loaded once per
+actor rather than once per shard. Shards are assigned to whichever actor is
+idle, so with many more shards than actors the wall time approaches the
+total work divided by the number of actors, instead of the time of the
+slowest of a fixed set of shards. A dead actor is restarted and its shard
+resumed from the shard's sink. The partition, sinks and merge are those
+above, so no row depends on Ray.
+
 A unit belongs to shard `sha256(unit_id) mod n`, so every process computes
 the same partition on its own, and a resumed shard picks up exactly its own
 units. Each shard writes its own sink, calibration and report at
