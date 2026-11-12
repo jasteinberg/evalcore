@@ -9,6 +9,11 @@ Prints one concrete object at each stage of the pipeline.
 The sink is written to OUT_DIR/rows.jsonl.  A rerun into the same directory
 resumes from that sink, so use a fresh directory after editing the example.
 
+This example calls `execute` (core/runner.py), the harness loop alone,
+so that each step is visible.  `Experiment.run()` (pipeline.py) runs the
+same loop as its execute stage, with calibration, a cost check, analysis
+and a report around it.
+
 Drafted with the assistance of Claude (Anthropic).
 """
 import json

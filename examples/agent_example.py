@@ -17,6 +17,11 @@ are scored.
 
     python examples/agent_example.py OUT_DIR
 
+This example calls `execute` (core/runner.py), the harness loop alone,
+so that each step is visible.  `Experiment.run()` (pipeline.py) runs the
+same loop as its execute stage, with calibration, a cost check, analysis
+and a report around it.  `stream=None` turns off the progress lines.
+
 Drafted with the assistance of Claude (Anthropic).
 """
 import json
@@ -102,7 +107,7 @@ def main(out_dir: str) -> None:
     agent = AgentBackend(inner, [ADD], max_turns=4)
     cells = grid({"agent": ["scripted"]})
     execute(units(cells, items()), agent, render, score, out, workers=1,
-            stream=open("/dev/null", "w"))
+            stream=None)
 
     df = to_frame(out)
     df["kind"] = df["item_id"].str.split("-").str[0]

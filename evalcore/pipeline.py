@@ -312,6 +312,22 @@ def report_stage(exp: Experiment, res: Results) -> None:
 
 @dataclass
 class Experiment:
+    """What to run (task, backend, cells, repeats, out) and how
+    (`options`), plus one field per stage.  `run()` calls the stages in
+    the order of `STAGES`, each as `stage(self, res)`.  Each stage field
+    defaults to the function of the same name above:
+
+        calibrate  calibrate_stage   core.calibrate.calibrate, then derive
+        dry_run    dry_run_stage     core.runner.plan, priced, no calls
+        execute    execute_stage     core.runner.execute(self.units(),
+                                     backend, task.render, task.score, out)
+        analyse    analyse_stage     every analysis in all_analyses()
+        report     report_stage      run.json beside the sink
+
+    So `exp.execute` is the stage, not `core.runner.execute`: the stage
+    is what calls it, with the options and the calibrated settings.  Pass
+    a function to replace a stage, or None to skip it."""
+
     task: Task
     backend: Backend
     cells: Sequence[Cell]
@@ -548,7 +564,7 @@ class Experiment:
                            f"({prior['finished_at']})")
         model_stages = ("calibrate", "dry_run", "execute")
         for name in self.STAGES:
-            stage = getattr(self, name)
+            stage = getattr(self, name)     # e.g. self.execute: execute_stage
             if (stage is None or (res.halted and name != "report")
                     or (res.skipped and name in model_stages)
                     or (self.shard is not None and name == "analyse")):

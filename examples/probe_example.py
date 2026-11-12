@@ -25,6 +25,11 @@ slope d m / d alpha, with intervals from resampling items.
 
 Needs torch and transformers (`pip install -e ".[hf]"`).
 
+This example calls `execute` (core/runner.py), the harness loop alone,
+so that each step is visible.  `Experiment.run()` (pipeline.py) runs the
+same loop as its execute stage, with calibration, a cost check, analysis
+and a report around it.  `stream=None` turns off the progress lines.
+
 Drafted with the assistance of Claude (Anthropic).
 """
 import sys
@@ -128,7 +133,7 @@ def main(out_dir: str) -> None:
     for a in ALPHAS:
         be = HFBackend(model, TOKENIZER, device="cpu", probe=Steer(a, v))
         execute(units(grid({"alpha": [a]}), its), be, render, score, out,
-                workers=1, batch_size=8, stream=open("/dev/null", "w"))
+                workers=1, batch_size=8, stream=None)
 
     df = to_frame(out)
     print(f"{len(df)} rows, statuses {df['status'].value_counts().to_dict()}")

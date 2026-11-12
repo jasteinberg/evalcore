@@ -193,7 +193,7 @@ def test_stale_manifest_reports_unplanned_rows_not_negative_attrition(
 
 
 def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
-        tmp_path):
+        tmp_path, capfd):
     """The plan is per sink, not per invocation.
 
     Sweep one plans both conditions and dies inside the first.  Sweep two is
@@ -211,6 +211,17 @@ def test_manifest_unions_across_resumes_so_a_narrowed_rerun_still_reports(
     df = run(narrow, EchoBackend(), out, stream=log)
     assert len(df) == 6                              # condition one, complete
     assert "6 planned units were never attempted" in log.getvalue()
+
+    # stream=None: no progress lines, but the warning still reaches stderr
+    out2 = tmp_path / "quiet.jsonl"
+    with pytest.raises(KeyboardInterrupt):
+        run(list(units(cells, its)), Dies(alive=4), out2)
+    capfd.readouterr()
+    run(narrow, EchoBackend(), out2, stream=None)
+    err = capfd.readouterr()
+    assert "6 planned units were never attempted" in err.err
+    assert "[run] done:" not in err.err + err.out
+    assert "units, " not in err.err + err.out        # the plan line
 
     full = attrition(to_frame(out), ["model"], manifest=manifest_path(out))
     assert full["n_planned"].sum() == 12

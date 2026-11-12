@@ -247,12 +247,24 @@ def _refuse_clashes(units: Sequence[Unit],
     return new
 
 
-def _report_plan(p: Plan, out: str | Path, stream: TextIO) -> None:
-    def say(msg: str) -> None:
-        print(f"[run] {msg}", file=stream, flush=True)
+def _say(stream: TextIO | None, msg: str, *, warning: bool = False) -> None:
+    """Print one `[run]` line on `stream`.  With stream=None, progress lines
+    are not printed, but a warning still goes to stderr: it reports units
+    that will be re-run or were never attempted."""
+    if stream is None:
+        if not warning:
+            return
+        stream = sys.stderr
+    print(f"[run] {msg}", file=stream, flush=True)
+
+
+def _report_plan(p: Plan, out: str | Path, stream: TextIO | None) -> None:
+    def say(msg: str, warning: bool = False) -> None:
+        _say(stream, msg, warning=warning)
     if p.unreadable:
         say(f"WARNING {p.unreadable} unreadable line(s) in {str(out)!r} (a "
-            f"write interrupted by a crash?). Their units will be re-run")
+            f"write interrupted by a crash?). Their units will be re-run",
+            warning=True)
     if p.stale:
         say(f"{p.stale} finished units were made from a different request "
             f"(prompt, item, backend or its defaults changed, or a local "
@@ -286,7 +298,7 @@ class _Context:
     batch_size: int
     total: int | None         # units to call, when known in advance
     log_every: int
-    stream: TextIO
+    stream: TextIO | None
     t0: float = field(default_factory=time.perf_counter)
     n: int = 0
     errors: int = 0
@@ -310,7 +322,7 @@ class _Context:
             else:
                 eta = (self.total - n) / max(rate, 1e-9)
                 msg = f"{n}/{self.total}  {rate:.1f}/s  eta {eta / 60:.1f}m"
-            print(f"[run] {msg}  err {errs}", file=self.stream, flush=True)
+            _say(self.stream, f"{msg}  err {errs}")
 
 
 def _join(reqs: Sequence[Request],
@@ -511,7 +523,7 @@ class Runner:
                  log_every: int = 25, events: bool = True,
                  manifest: str | Path | bool = True,
                  score_version: str | None = None,
-                 stream: TextIO = sys.stderr,
+                 stream: TextIO | None = sys.stderr,
                  _shard: tuple[int, int] | None = None,
                  _keep_rows: bool = True) -> None:
         backend.identity()                # refuse before touching any file
@@ -587,10 +599,10 @@ class Runner:
         if start is None:
             start = {"incremental": True}
             if self.state.unreadable:
-                print(f"[run] WARNING {self.state.unreadable} unreadable "
-                      f"line(s) in {str(out)!r} (a write interrupted by a "
-                      f"crash?). Their units will be re-run", file=self.stream,
-                      flush=True)
+                _say(self.stream, f"WARNING {self.state.unreadable} "
+                     f"unreadable line(s) in {str(out)!r} (a write "
+                     f"interrupted by a crash?). Their units will be re-run",
+                     warning=True)
         self.ctx.emit("run_start", **start, workers=self.workers,
                       batch_size=self.batch_size, backend=type(b).__name__,
                       identity=digest(b.identity()), out=str(out))
@@ -695,14 +707,13 @@ class Runner:
         if ctx.events is not None:
             ctx.events.close()
         cache_msg = f", cache {c.hits} hit / {c.misses} miss" if c else ""
-        print(f"[run] done: {ctx.n} units in {el / 60:.1f}m, {ctx.errors} "
-              f"errors{cache_msg}", file=self.stream, flush=True)
+        _say(self.stream, f"done: {ctx.n} units in {el / 60:.1f}m, "
+             f"{ctx.errors} errors{cache_msg}")
         t = self.tally
         if any(t.values()):
-            print(f"[run] also: {t['from_sink']} returned from the sink, "
-                  f"{t['rescored']} re-scored, {t['stale']} stale and "
-                  f"{t['retried']} errored units redone", file=self.stream,
-                  flush=True)
+            _say(self.stream, f"also: {t['from_sink']} returned from the "
+                 f"sink, {t['rescored']} re-scored, {t['stale']} stale and "
+                 f"{t['retried']} errored units redone")
         if self.mpath is not None:
             # Against the manifest, not this invocation's units: a narrowed
             # resume (a `limit=`, one condition re-run) is exactly the case
@@ -712,9 +723,9 @@ class Runner:
             never = len({u for u in self.planned if self.mine(u)}
                         - self.state.seen.keys())
             if never:
-                print(f"[run] WARNING {never} planned units were never "
-                      f"attempted. Pass manifest={str(self.mpath)!r} to "
-                      f"attrition()", file=self.stream, flush=True)
+                _say(self.stream, f"WARNING {never} planned units were "
+                     f"never attempted. Pass manifest={str(self.mpath)!r} "
+                     f"to attrition()", warning=True)
 
 
 def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Score,
@@ -725,7 +736,7 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
         manifest: str | Path | bool = True,
         shard: tuple[int, int] | None = None,
         score_version: str | None = None,
-        stream: TextIO = sys.stderr) -> pd.DataFrame:
+        stream: TextIO | None = sys.stderr) -> pd.DataFrame:
     """Execute `units`, writing one row per unit to `out` (JSONL), and
     return the frame.
 
@@ -747,6 +758,9 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
 
     `score_version` names the scorer: rows record it, and a finished row
     scored under another one is re-scored without a call (see `plan`).
+
+    Progress lines go to `stream`.  `stream=None` prints only warnings
+    (to stderr).
 
     One call reads the whole sink and manifest.  A caller that executes
     one unit at a time should hold a `Runner` open instead.
