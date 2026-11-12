@@ -126,6 +126,76 @@ these end to end with nothing to download.
            ──► curves / retrieval metrics / paired comparisons ──► run.json
 ```
 
+The same loop by file. Each box names the function or class that does the step, and each frame the module that holds it:
+
+```mermaid
+flowchart TD
+  subgraph PIPE["pipeline.py"]
+    XS["execute_stage"]
+    AS["analyse_stage"]
+    RS["report_stage → run.json"]
+  end
+  subgraph SPEC["core/spec.py"]
+    UN["grid × items → units()"]
+  end
+  subgraph TASK["tasks/base.py"]
+    TR["Task.render(unit) → Request"]
+    TS["Task.score(unit, response)"]
+  end
+  subgraph RUN["core/runner.py"]
+    EX["execute() → Runner"]
+    PL["_plan: rendered, request_key;<br/>done / stale / errored / new"]
+    BA["_batch: one batch of units to do"]
+    CA["_call: refusal, cache, backend"]
+    RO["_row: status, then score (ok rows only)"]
+  end
+  subgraph BASE["core/backends/base.py"]
+    RK["request_key(req, repeat, backend)"]
+    RT["with_retries / batch_with_retries"]
+  end
+  subgraph IMPL["core/backends/: http.py, hf.py + probe.py; core/agent.py; core/search/"]
+    BE["Backend.complete / complete_batch"]
+  end
+  subgraph CACHE["core/backends/cache.py"]
+    CG["Cache.get / Cache.put"]
+  end
+  subgraph REC["core/records.py"]
+    SS["SinkState: the sink read once"]
+    AP["append_plan: manifest, before any call"]
+    AR["ArrayStore.put: .npz sidecar"]
+    SL["SinkLog.write: one row, one write(2)"]
+    TF["to_frame"]
+  end
+  subgraph EVT["core/events.py"]
+    EL["EventLog.emit: run_start, unit, retry, run_end"]
+  end
+  subgraph EVAL["evaluation/ via analyses.py"]
+    AT["attrition.py: attrition(df, by, manifest)"]
+    SU["stats.py: summarize → cluster_bootstrap"]
+  end
+
+  XS --> UN --> EX
+  EX --> PL
+  SS --> PL
+  PL --> TR
+  PL --> RK
+  PL --> AP --> BA
+  BA --> CA
+  CA --> CG
+  CA -- miss --> RT --> BE
+  BE -- arrays --> AR
+  BE -- response --> CG
+  CA --> RO --> TS
+  RO --> SL
+  BA --> EL
+  SL --> TF
+  XS --> AS
+  TF --> AS
+  AS --> AT
+  AS --> SU
+  AS --> RS
+```
+
 The `Experiment` in `pipeline.py` wraps this loop in five stages, each a
 plain function `stage(exp, res) -> None` that can be replaced, or switched
 off with `None`:
@@ -316,25 +386,30 @@ key-by-key contract is in the docstring of `HFBackend._probing`.
 
 The unit of resampling is the **cluster**: a source item together with
 every repeat and every augmentation derived from it, never the row. Under
-`X_ij = mu + a_i + e_ij` with `k` clusters of `m` rows,
+$X_{ij} = \mu + a_i + e_{ij}$, with $k$ clusters of $m$ rows ($N = km$),
+independent cluster effects $a_i$ of variance $\sigma_a^2$ and row noise
+$e_{ij}$ of variance $\sigma_e^2$, the grand mean $\hat\theta$ has
 
-```
-Var(theta) = (s2_a + s2_e/m) / k          honest
-Var_naive  = (s2_a + s2_e) / (km)         row-resampling
-DEFF = Var/Var_naive = 1 + (m-1) rho,     rho = s2_a / (s2_a + s2_e)
-n_eff = N / DEFF
-```
+$$
+\begin{aligned}
+\operatorname{Var}(\hat\theta) &= \frac{\sigma_a^2 + \sigma_e^2/m}{k} && \text{(honest)} \\
+\operatorname{Var}_{\text{naive}} &= \frac{\sigma_a^2 + \sigma_e^2}{km} && \text{(row resampling)} \\
+\mathrm{DEFF} &= \frac{\operatorname{Var}(\hat\theta)}{\operatorname{Var}_{\text{naive}}} = 1 + (m-1)\rho, \qquad \rho = \frac{\sigma_a^2}{\sigma_a^2 + \sigma_e^2} \\
+n_{\text{eff}} &= N / \mathrm{DEFF}
+\end{aligned}
+$$
 
-At `rho -> 1`, ten paraphrases of one question buy you one question. At
-`rho -> 0` they buy ten. `summarize()` prints `n_eff` beside `n_rows` for
+At $\rho \to 1$, ten paraphrases of one question buy you one question. At
+$\rho \to 0$ they buy ten. `summarize()` prints `n_eff` beside `n_rows` for
 exactly this reason.
 
-Coverage of a nominal 95% interval, simulated (m=6 rows per cluster,
-rho=0.6, DEFF=4; at k=40, N=240 rows and n_eff=60; 1000 datasets per k):
+Coverage of a nominal 95% interval, simulated ($m = 6$ rows per cluster,
+$\rho = 0.6$, $\mathrm{DEFF} = 4$; at $k = 40$, $N = 240$ rows and
+$n_{\text{eff}} = 60$; 1000 datasets per $k$):
 
 ![Coverage against the number of clusters](docs/coverage.png)
 
-| clusters k | cluster bootstrap (BCa) | row bootstrap |
+| clusters $k$ | cluster bootstrap (BCa) | row bootstrap |
 |---|---|---|
 | 3 | 0.73 | 0.57 |
 | 5 | 0.84 | 0.62 |
@@ -342,14 +417,15 @@ rho=0.6, DEFF=4; at k=40, N=240 rows and n_eff=60; 1000 datasets per k):
 | 20 | 0.92 | 0.64 |
 | 40 | 0.94 | 0.67 |
 
-The row bootstrap treats the N rows as independent, so its standard error
-is too small by a factor `sqrt(DEFF)` at every k, and its coverage tends to
-`2 Phi(1.96/sqrt(DEFF)) - 1 = 0.673` as k grows, not to 0.95.
+The row bootstrap treats the $N$ rows as independent, so its standard error
+is too small by a factor $\sqrt{\mathrm{DEFF}}$ at every $k$, and its
+coverage tends to $2\Phi(1.96/\sqrt{\mathrm{DEFF}}) - 1 = 0.673$ as $k$
+grows, not to 0.95.
 
-The cluster bootstrap estimates the between-cluster variance from the k
+The cluster bootstrap estimates the between-cluster variance from the $k$
 observed clusters. Its variance estimate carries the plug-in factor
-`(k-1)/k`, and its quantiles do not account for the uncertainty in that
-estimate (the gap between `t_{k-1}` and normal quantiles), so at small k
+$(k-1)/k$, and its quantiles do not account for the uncertainty in that
+estimate (the gap between $t_{k-1}$ and normal quantiles), so at small $k$
 the interval under-covers. `summarize` flags any cell with fewer than 20
 clusters.
 
@@ -382,9 +458,10 @@ search, so an approximation shows up as a number. The same retrievers serve
 as the agent's search tool (`CorpusSearch`).
 
 `SampledRetriever(base, beta, seed)` makes a deterministic ranking random.
-It draws k documents without replacement with probability proportional to
-exp(beta × score), a Plackett-Luce draw done by the Gumbel top-k trick.
-beta = 0 gives a uniformly random subset, and beta = inf gives the base
+It draws $k$ documents without replacement with probability proportional to
+$\exp(\beta \cdot \mathrm{score})$, a Plackett-Luce draw done by the
+Gumbel top-$k$ trick. $\beta = 0$ gives a uniformly random subset, and
+$\beta \to \infty$ gives the base
 ranking itself. Each draw is fixed by the query and the unit's repeat
 index, so repeats are independent draws while a rerun reproduces every
 row. `draw()` also returns the noise behind each draw, for logging.
@@ -442,7 +519,7 @@ distractors) to measure judges on.
 `execute` takes its units as a batch and reads the whole sink and manifest
 at each call. A caller whose next unit depends on the previous unit's
 output (a multi-turn simulation, an agent outside the harness) must call it
-once per unit, and N such calls into one sink parse O(N^2) lines. A
+once per unit, and $N$ such calls into one sink parse $O(N^2)$ lines. A
 `Runner` held open reads the sink and the manifest once, keeps their state
 in memory, and per unit appends one row, one manifest record and the
 unit's events:
