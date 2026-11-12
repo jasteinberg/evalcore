@@ -310,7 +310,11 @@ def test_run_does_not_touch_torch_random_state(tmp_path):
 class IOCount:
     """Counts JSONL reads (records.read_jsonl, which every sink and manifest
     read goes through) and opens of each path, through builtins.open,
-    io.open (which pathlib's Path.open calls) and os.open."""
+    io.open, Path.open and os.open.  Path.open is patched itself: on Python
+    3.10 it calls an io.open that pathlib bound at import, which patching
+    io.open does not reach.  The patched Path.open opens through the
+    unpatched builtin, so on 3.11+ (where Path.open calls io.open) an open
+    is not counted twice."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.reads: list[str] = []
@@ -327,6 +331,10 @@ class IOCount:
                 self.opens.append(Path(file).name)
             return bopen(file, *a, **k)
 
+        def counted_popen(path: Path, *a: Any, **k: Any) -> Any:
+            self.opens.append(path.name)
+            return bopen(path, *a, **k)
+
         def counted_oopen(path, *a, **k):
             self.opens.append(Path(path).name)
             return oopen(path, *a, **k)
@@ -334,6 +342,7 @@ class IOCount:
         monkeypatch.setattr(records_mod, "read_jsonl", counted_read)
         monkeypatch.setattr(builtins, "open", counted_bopen)
         monkeypatch.setattr(io, "open", counted_bopen)
+        monkeypatch.setattr(Path, "open", counted_popen)
         monkeypatch.setattr(os, "open", counted_oopen)
 
     def reset(self) -> None:
