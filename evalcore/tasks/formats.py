@@ -23,7 +23,7 @@ prompt AND messages (or neither), an unknown field (a typo such as "glod"
 would otherwise silently drop the gold), an unknown grader, a grader option
 it does not take (a typo such as "rell"), a grader with no gold, and a gold
 the grader can never score (one that normalises to "", a label outside its
-options).  Nothing is defaulted.
+options).  No field is given a default.
 """
 
 from __future__ import annotations

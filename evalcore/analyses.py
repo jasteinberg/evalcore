@@ -4,12 +4,12 @@ An analysis is any function
 
     analysis(frame, ctx) -> DataFrame | {name: DataFrame}
 
-where `frame` holds every row of the run (all statuses) and `ctx` says the
-grid axes, the manifest and the sink.  An Experiment takes a mapping
-{name: analysis}, and each table is written to `<sink>.analysis/<name>.csv`
-(a dict result to `<name>.<key>.csv`).  The factories below build the
-usual ones.  Write your own for anything else, or pass `None` for the
-analyse stage to skip it.
+where `frame` holds every row of the run (all statuses) and `ctx` gives the
+grid axes, the manifest path and the sink path.  An Experiment takes a mapping
+{name: analysis}, and each table is written to `<sink>.analysis/<name>.csv` (a
+dict result to `<name>.<key>.csv`).  The factories below build the usual ones.
+Write your own for anything else, or pass `None` for the analyse stage to skip
+it.
 
 Only `ok` rows carry scores.  A summary is still handed every row, so
 that the rows lost before scoring (error, truncated, unparsed) are counted
@@ -66,7 +66,7 @@ def attrition_table() -> Analysis:
 def summary(metric: str, by: Sequence[str] | None = None,
             **summarize_kw: Any) -> Analysis:
     """The cluster-bootstrap summary of `metric` per cell (stats.summarize).
-    Keyword arguments pass through: n_boot, method, label, floor, ...)."""
+    Keyword arguments (n_boot, method, label, floor, ...) pass through."""
     def run(frame: pd.DataFrame, ctx: AnalysisContext) -> Tables:
         if metric not in frame:
             raise KeyError(f"summary: no column {metric!r} in the results. "

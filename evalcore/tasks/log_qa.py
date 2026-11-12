@@ -3,10 +3,10 @@ r"""Question answering over structured execution logs, generated.
 Every trace is generated from a seed: a tree of operations ("spans"), each
 with an id, a parent, a start and end time, a status and a few attributes.
 Children run one after another inside their parent's interval.  Some
-operations fail, and a failed operation is sometimes retried.  Nothing is
-hand-written, so there are as many traces as wanted, of any size and depth,
-and every question's gold answer is computed from the trace -- exact by
-construction.
+operations fail, and a failed operation is sometimes retried.  No trace
+is hand-written, so there are as many traces as wanted, of any size and
+depth.  Every question's gold answer is computed from the trace, which
+makes it exact by construction.
 
 The same trace can be serialised three ways, which is an experimental axis
 in itself: `json` (a list of span records), `tree` (indented by depth), and
@@ -30,9 +30,10 @@ answer is counted as a hallucination, separately from "wrong".
 
 Questions about one span record where that span sits in the serialised
 context (`meta["position"]`, 0 = start, 1 = end), and `position=` asks
-the generator to pick target spans near a given relative position -- the
-axis of a lost-in-the-middle study.  All questions about one trace share
-it as their cluster, so the bootstrap resamples traces, not questions.
+the generator to pick target spans near a given relative position (the
+axis of a lost-in-the-middle study).  All questions about one trace share
+that trace as their cluster, so the bootstrap resamples traces, not
+questions.
 """
 
 from __future__ import annotations
@@ -113,7 +114,7 @@ def generate_trace(rng: random.Random, n_spans: int = 20, max_depth: int = 3,
         return sp
 
     build("job", None, 0, 0)
-    while len(spans) < n_spans:        # top up under the root if short
+    while len(spans) < n_spans:        # add children of the root up to n_spans
         root = spans[0]
         extra = build(rng.choice(OPERATIONS), root.id, root.end_ms + 1, 1)
         root.end_ms = extra.end_ms + rng.randint(1, 5)

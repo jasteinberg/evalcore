@@ -2,7 +2,7 @@ r"""Curves along a model axis: accuracy, susceptibility and composition, with
 uncertainty paired across the axis.
 
 The setting.  One fixed item set is scored at every point x_1 < ... < x_n of
-an axis -- parameter count N, training tokens D, a checkpoint index.  For
+an axis (parameter count N, training tokens D, a checkpoint index).  For
 item i at point x, teacher forcing gives per-token correctness
 c_{ij}(x) in {0, 1} for target positions j < l_i, and the sequence is
 right iff every token is:
@@ -207,8 +207,8 @@ def axis_data(df: pd.DataFrame, x: str, item: str = "item_id",
 def _wsum(w: np.ndarray, a: np.ndarray) -> np.ndarray:
     """sum_k w[b, k] a[k, ...].  einsum rather than `@`: the inner shapes are
     (replicates x items) times (items x a few positions), for which a
-    threaded BLAS spends far longer starting threads than multiplying --
-    measured at ~8x slower than this on a laptop."""
+    threaded BLAS spends far longer starting threads than multiplying
+    (measured at ~8x slower than this on a laptop)."""
     return np.einsum("bk,k...->b...", w, np.asarray(a, float))
 
 
@@ -217,8 +217,8 @@ def composition(w: np.ndarray, ok: np.ndarray, valid: np.ndarray,
     """A_obs, p, A_pred (pooled), A_pred_lc and the residuals at one axis
     point, as WEIGHTED means over items.  See the module docstring.
 
-    `w` is (k,) -- unit weights give the plain estimates -- or (B, k), one
-    row per bootstrap replicate, in which case every output is (B,)."""
+    `w` is (k,), where unit weights give the plain estimates, or (B, k),
+    one row per bootstrap replicate, in which case every output is (B,)."""
     one = np.ndim(w) == 1
     w = np.atleast_2d(np.asarray(w, float))                # (B, k)
     W = w.sum(1)
@@ -275,8 +275,8 @@ def axis_bootstrap(data: AxisData,
                    ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Point value and replicates of any functional of the aligned table.
 
-    `stat(W, data)` receives a (B, k_items) weight matrix -- each row one
-    replicate, the same row applied at every x -- and returns a dict of
+    `stat(W, data)` receives a (B, k_items) weight matrix (each row one
+    replicate, the same row applied at every x) and returns a dict of
     arrays with leading dimension B.  The point value is `stat` at unit
     weights.  Replicates draw CLUSTERS (with replacement, or `m` without
     replacement) and expand them to their items.  Computed in chunks of
@@ -317,8 +317,8 @@ def _peak(xs: np.ndarray, chi: np.ndarray
     """Per replicate row of `chi` (B, n_x): the argmax index, and peak_x,
     peak_at_edge, peak_chi."""
     i = np.argmax(chi, 1)
-    # chi at an end point is a one-sided difference -- for a single jump,
-    # twice the centred value -- so a peak there is a grid artefact
+    # chi at an end point is a one-sided difference (for a single jump,
+    # twice the centred value), so a peak there is a grid artefact
     return i, {"peak_x": xs[i],
                "peak_at_edge": ((i == 0) | (i == len(xs) - 1)).astype(float),
                "peak_chi": chi[np.arange(len(chi)), i]}
@@ -387,7 +387,7 @@ def axis_curves(df: pd.DataFrame, x: str, item: str = "item_id",
                 alpha: float = 0.05, log_x: bool = True) -> AxisCurves:
     """The whole analysis of one model axis in one call: A_obs, p, A_pred,
     A_pred_lc, phi, phi_lc, phi_l for each length, chi of each curve, and
-    the peak functionals -- every one with a paired percentile interval.
+    the peak functionals, each with a paired percentile interval.
 
     chi is taken against log x unless `log_x=False` (an axis that includes
     0, such as a checkpoint step, needs the linear form).  `peak_at_edge`
@@ -539,8 +539,8 @@ def value_curves(df: pd.DataFrame, x: str, value: str,
                  seed: int = 0, alpha: float = 0.05,
                  log_x: bool = True) -> AxisCurves:
     """The mean of `value` at each x, its chi = d mean / d log x, the peak
-    functionals, and the first crossing of each level in `levels` -- every
-    one with an item-paired percentile interval (see the module docstring).
+    functionals, and the first crossing of each level in `levels`, each
+    with an item-paired percentile interval (see the module docstring).
 
     For a crossing, `crossing_<level>_censored` reports the share of
     replicates whose curve never reaches the level.  A large share means

@@ -63,8 +63,9 @@ class ToolContext:
     repeat: int
 
     def key(self) -> dict[str, Any]:
-        """What keys a context tool's cached result: not the unit id, which
-        also names the cell, so cells sharing an item share results."""
+        """The fields that key a context tool's cached result.  The unit id
+        is left out because it also names the cell, and cells that share
+        an item share results."""
         return {"item_id": self.item_id, "repeat": self.repeat}
 
 

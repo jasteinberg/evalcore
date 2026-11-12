@@ -19,8 +19,8 @@ unknown `pick`, a gold that is not one of the options, a gold that
 normalises to the empty string).  `check_spec` relies on that order: it
 calls the grader with an empty response, which every grader must refuse
 with ParseFailure, so a ParseFailure there means the spec and gold are
-sound and only the response is missing.  A task file is checked
-this way at load, before any model call.
+sound and only the response is missing.  A task file is checked this way
+when it is loaded, before any model call.
 """
 
 from __future__ import annotations
@@ -46,8 +46,9 @@ GraderFn = TypeVar("GraderFn", bound=Callable[..., dict[str, Any]])
 
 def grader(name: str, *, replace: bool = False
            ) -> Callable[[GraderFn], GraderFn]:
-    """Register a grader under `name`.  A taken name is refused unless
-    `replace` (one implementation per name, as `Registry.add` enforces)."""
+    """Register a grader under `name`.  A name already registered is refused
+    unless `replace` is set (one implementation per name, as
+    `Registry.add` enforces)."""
     def deco(fn: GraderFn) -> GraderFn:
         if name in GRADERS and not replace:
             raise ValueError(f"grader {name!r} is already registered "
@@ -110,8 +111,8 @@ def exact(text: str, gold: Any, case: bool = False, punct: bool = False,
 def contains(text: str, gold: Any, case: bool = False,
              punct: bool = False) -> dict[str, Any]:
     """The normalised gold (or an alias) occurs in the normalised text.  It
-    rewards verbosity -- a response listing every candidate contains the
-    right one -- so prefer `exact` with `extract` where the format allows."""
+    rewards verbosity (a response listing every candidate contains the
+    right one), so prefer `exact` with `extract` where the format allows."""
     golds = _text_golds(gold, case, punct)
     t = normalize(_text(text), case, punct)
     return {"correct": float(any(g in t for g in golds))}
@@ -339,9 +340,9 @@ def label(text: str, gold: str, options: Sequence[str]) -> dict[str, Any]:
     """A closed-set answer: the response must name exactly one of `options`
     (whole-word, case-insensitive), and it is compared with the gold.  Free
     text around it is fine ("the slowest was fetch_page").  Naming none is a
-    parse failure.  Naming several is ambiguous, also a parse failure --
-    otherwise listing every option would score as right.  A gold that is not
-    one of the options could never be named, so it is refused."""
+    parse failure.  Naming several is ambiguous and also a parse failure,
+    since otherwise listing every option would score as right.  A gold that
+    is not one of the options could never be named, so it is refused."""
     if gold not in options:
         raise ValueError(f"label: gold {gold!r} is not one of the options "
                          f"{list(options)}")

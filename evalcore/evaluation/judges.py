@@ -45,8 +45,8 @@ The first term alone is the attenuation: a judge with discrimination lambda
 turns n answers into n lambda^2 effective ones.  The other two are the
 price of not knowing alpha and beta exactly.  The assumption that carries
 the weight is transfer: alpha and beta measured on the calibration set hold
-on the answers being scored.  That is a claim about the data, not checked
-here; the disjointness of the two sets is.
+on the answers being scored.  That is a claim about the data, which this
+module does not check.  It does check that the two sets are disjoint.
 
 3. Agreement between two judges on the same answers.  Raw agreement p_o
 hides base rates, so Cohen's kappa sits next to it,
@@ -113,7 +113,8 @@ def ratio_se(num: np.ndarray, den: np.ndarray) -> float:
     random).  Such a cluster has num = 0 and adds nothing to the sum.  When
     fewer than two clusters have den > 0, every residual is zero by
     construction (num_c - r den_c = 0 for the one cluster that holds the
-    domain), and eq. (1) would return 0, not an estimate: NaN instead."""
+    domain), and eq. (1) would return 0, which is not an estimate, so NaN
+    is returned instead."""
     num, den = np.asarray(num, float), np.asarray(den, float)
     k, total = len(num), float(den.sum())
     if k < 2 or total == 0 or (den > 0).sum() < 2:
@@ -178,10 +179,11 @@ def debiased_mean(df: pd.DataFrame, cal: Mapping[str, Any],
                   cluster: str = "cluster", n_boot: int = 10_000,
                   seed: int = 0) -> dict[str, float]:
     """The debiased pass rate of one judge on one criterion over `df`, with
-    `cal` a row of `judge_error_rates` for that judge and criterion.  m and its se
-    come from the cluster bootstrap.  Refuses any cluster shared with the
-    calibration set: eq. (3) assumes independent errors in m and in
-    (alpha, beta), and a shared item also means the reference was there."""
+    `cal` a row of `judge_error_rates` for that judge and criterion.  m and
+    its se come from the cluster bootstrap.  Refuses any cluster shared with
+    the calibration set: eq. (3) assumes independent errors in m and in
+    (alpha, beta).  A shared item also has a reference answer, so its
+    correctness is known and needs no judge."""
     _require(df, [verdict, cluster], "debiased_mean")
     shared = set(df[cluster]) & set(cal_clusters)
     if shared:

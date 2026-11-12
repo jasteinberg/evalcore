@@ -9,8 +9,8 @@ field with one signature, `stage(exp, res) -> None`: it reads what earlier
 stages put in `res` and adds its own.  Replace a stage by passing a
 function, or switch it off with None (`execute=None` re-analyses an
 existing sink without calling the model).  A stage may halt the run by
-setting `res.halted` -- the dry run does, over budget -- and the report is
-still written, so a halted run is documented too.
+setting `res.halted` (the dry run does so over budget), and the report
+is still written, so a halted run is documented too.
 
 What the analyse stage computes is itself pluggable: `analyses` maps a
 name to any `analysis(frame, ctx) -> table` (analyses.py has the usual
@@ -78,9 +78,10 @@ class RunOptions:
     recalibrate: bool = False               # ignore a saved calibration
     calibration_max_age_h: float = 24.0
     prices: dict[str, float] | None = None  # $ per 1M tokens: {"in", "out"}
-    max_cost: float | None = None           # dry run halts above this, or
-    confirm: bool = False                   # when it cannot estimate, unless
-                                            # confirmed.  Needs prices.
+    # The dry run halts when the estimated cost exceeds max_cost, or when it
+    # cannot estimate the cost, unless confirm is set.  max_cost needs prices.
+    max_cost: float | None = None
+    confirm: bool = False
     dry_run_only: bool = False
 
 
@@ -105,8 +106,8 @@ class Results:
 # --- default stages -----------------------------------------------------------
 
 def calibrate_stage(exp: Experiment, res: Results) -> None:
-    """Measure the backend on the experiment's own requests -- interleaved
-    across cells -- or reuse a saved calibration of the same backend
+    """Measure the backend on the experiment's own requests, interleaved
+    across cells, or reuse a saved calibration of the same backend
     identity that is fresh enough, then derive run settings.  Explicit
     RunOptions win over derived ones, and the record says which applied."""
     path = exp.calibration_path()
@@ -216,11 +217,11 @@ def dry_run_stage(exp: Experiment, res: Results) -> None:
 
 def batch_size_for(exp: Experiment, res: Results) -> int:
     """The batch size this invocation runs at: the explicit option, else,
-    for a local model (whose numerics padding can change) the one the sink's
-    rows were already made at, else calibration's, else 1.  Reusing the
-    sink's keeps a resume from re-deriving a different size after the
-    calibration expires and redoing every row (plan treats a row of another
-    batch size as stale for such a backend)."""
+    for a local model (whose outputs can change with padding) the batch
+    size the sink's rows were already made at, else calibration's, else 1.
+    Reusing the sink's batch size keeps a resume from deriving a different
+    one after the calibration expires and then redoing every row (`plan`
+    treats a row of another batch size as stale for such a backend)."""
     o = exp.options
     if o.batch_size is not None:
         return o.batch_size
@@ -341,11 +342,12 @@ class Experiment:
     execute: Stage | None = execute_stage
     analyse: Stage | None = analyse_stage
     report: Stage | None = report_stage
-    # set by `sharded` only, so not __init__ arguments: (i, n), and the
-    # unsharded sink, beside which the shards share one calibration
+    # set only by `sharded`, so not __init__ arguments: `shard` is (i, n),
+    # and `whole` is the unsharded sink, beside which the shards share one
+    # calibration
     shard: tuple[int, int] | None = field(default=None, init=False)
     whole: Path | None = field(default=None, init=False)
-    # the resolved config, set by `from_config`; None when built in Python
+    # the resolved config, set by `from_config`, or None when built in Python
     config: dict[str, Any] | None = field(default=None, init=False)
 
     STAGES = ("calibrate", "dry_run", "execute", "analyse", "report")
@@ -370,9 +372,10 @@ class Experiment:
             raise ValueError("max_cost is checked by the dry run against the "
                              "calibration. With the calibrate or dry_run "
                              "stage off the budget cannot be checked")
-        # a request the backend cannot serve fails here, before any spend:
-        # every unit's, since one item with a target among plain ones
-        # would otherwise surface only as error rows after the spend
+        # a request the backend cannot serve fails here, before any spend.
+        # Every unit's request is checked, since one item with a target
+        # among plain ones would otherwise surface only as error rows after
+        # the spend
         refused: dict[str, list[str]] = {}
         all_units = self.units()
         for u in all_units:
@@ -401,10 +404,10 @@ class Experiment:
 
     def sharded(self, i: int, n: int) -> Experiment:
         """This experiment as shard i of n: its own sink at
-        `shard_path(out, i, n)` (report and marker beside it; the
-        calibration is shared, beside `out`),
-        only its share of the units, and no analysis, since one shard's
-        tables would describe a fraction of the sweep.  `merge(n)` analyses
+        `shard_path(out, i, n)` (report and marker beside it, and the
+        calibration shared beside `out`), only its share of the units, and
+        no analysis, since one shard's tables would describe a fraction of
+        the sweep.  `merge(n)` analyses
         the whole once the shards are done."""
         if self.shard is not None:
             raise ValueError(f"already shard {self.shard}")
@@ -513,16 +516,16 @@ class Experiment:
                               digest(sorted request_keys))
 
         Items enter in full, so a gold answer that never reaches the prompt
-        still changes the job.  The request keys cover each rendered prompt
-        (a template edit with no version bump), the backend's identity and
-        defaults, and the repeat index.  An explicit batch_size enters
-        because padding can change a local model's numerics; a calibrated
-        one is not known yet when the hash is taken, so every row records
-        the batch size it was made at and `plan` redoes a local model's rows
-        made at another (see `batch_size_for`).  limit enters because it
-        changes which units are planned.  Workers, retries, caching and the code
-        commit do not: they change how a result is obtained, not what it is
-        (the commit is recorded in the marker)."""
+        still changes the job.  The request keys cover each rendered prompt (a
+        template edit with no version bump), the backend's identity and
+        defaults, and the repeat index.  An explicit batch_size enters because
+        padding can change a local model's numerics.  A calibrated one is not
+        yet known when the hash is taken, so every row records the batch size
+        it was made at, and `plan` redoes a local model's rows made at another
+        batch size (see `batch_size_for`).  limit enters because it changes
+        which units are planned.  Workers, retries, caching and the code commit
+        do not: they change how a result is obtained, not what it is (the
+        commit is recorded in the marker)."""
         o = self.options
         keys = sorted(request_key(rendered(self.task.render, u), u.repeat,
                                   self.backend)
@@ -554,8 +557,9 @@ class Experiment:
         res.job_hash = self.job_hash()
         done = self.path("done")
         prior = read_marker(done)
-        # the sink is re-read rather than trusted: one deleted or edited by
-        # hand since the marker was written must not be reported as done
+        # the sink is re-read rather than the marker trusted: a sink deleted
+        # or edited by hand since the marker was written must not be
+        # reported as done
         if (self.options.resume and prior is not None
                 and prior["job_hash"] == res.job_hash
                 and prior["status"] == "complete"
@@ -599,7 +603,7 @@ def job_status(out: Path, planned: Sequence[Unit]
 
     Each planned unit takes the status of its last row (to_frame is
     last-wins), or "missing" if it has none.  "complete": every unit has a
-    result (ok, truncated or unparsed -- a result the scorer saw or
+    result (ok, truncated or unparsed: a response the scorer saw, or
     deliberately did not score).  "complete_with_errors": every unit has a
     row, and some are error or tool_error.  "incomplete": some unit has no
     row at all."""
@@ -733,7 +737,8 @@ def provenance(pkg: Path = PACKAGE) -> dict[str, Any]:
                                        f"({p.returncode}): {p.stderr.strip()}")
                 diff += p.stdout
     except (OSError, subprocess.SubprocessError) as exc:
-        # the checkout answered rev-parse and status a moment ago
+        # git answered rev-parse and status in this checkout a moment ago,
+        # so a failure now is an error, not a missing checkout
         raise RuntimeError(f"git failed in a checkout that answered "
                            f"rev-parse a moment ago: {exc}") from exc
     from . import __version__

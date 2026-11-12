@@ -10,10 +10,10 @@ from .base import Backend, Request, Response, qualified_name
 
 
 class EchoBackend(Backend):
-    """Deterministic offline stand-in.  Exists so the whole pipeline --
-    grid, runner, cache, frame, CIs, plots -- can be exercised end to end
-    with zero API spend and zero network, which is the only way a dry run
-    actually tests the harness rather than the vendor."""
+    """Deterministic offline stand-in.  It lets the whole pipeline (grid,
+    runner, cache, frame, CIs, plots) run end to end with no API spend and
+    no network, so that a dry run tests the harness rather than the
+    vendor."""
 
     name = "echo"
 

@@ -7,7 +7,7 @@ returns a ranked list d_1, d_2, ... .  Per query:
     recall@k = |R_q n {d_1..d_k}| / |R_q|
     hit@k    = 1[R_q n {d_1..d_k} != {}]
     RR       = 1 / (rank of the first relevant document), 0 if none is
-               returned -- so MRR depends on how deep the list goes.  It is
+               returned, so MRR depends on how deep the list goes.  It is
                MRR at the returned depth, and rows must share that depth to
                be compared.
     nDCG@k   = DCG@k / IDCG@k,  DCG@k = sum_{i <= k} g(d_i) / log2(i + 1),

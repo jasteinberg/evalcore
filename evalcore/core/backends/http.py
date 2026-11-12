@@ -44,7 +44,7 @@ from .base import (
 # model-side ToolInputError rather than the harness guessing.
 #
 # A provider may attach opaque data to a model turn that must come back
-# verbatim -- Gemini's `thoughtSignature` on functionCall parts (a missing
+# verbatim: Gemini's `thoughtSignature` on functionCall parts (a missing
 # one is a 400, found in a live run), Anthropic's thinking blocks.  The
 # parser keeps the turn as meta["raw_turn"] = {flavour: raw}, the agent
 # carries it on the assistant message, and the adapter of the SAME flavour
@@ -246,7 +246,7 @@ def _chat_completions(model: str, messages: Sequence[Message],
     # OpenAI: `max_tokens` is deprecated in Chat Completions and rejected by
     # newer models (found live, 2 Oct).  `max_completion_tokens` replaces
     # it.  It also counts reasoning tokens, so on a reasoning model a small
-    # budget can be spent before any visible text -- the row is then
+    # budget can be spent before any visible text, and the row is then
     # `truncated`.
     if "max_tokens" in params:
         body[budget] = params["max_tokens"]
@@ -368,7 +368,7 @@ RATE_LIMIT_CUES = ("ratelimit", "rate-limit", "quota", "retry-after")
 def _error_text(r: httpx.Response) -> str:
     """The provider's own error: status, message and a bounded dump of its
     details.  The details are where the actionable part lives (which quota,
-    which field) -- a 200-character cut lost them in the first live run."""
+    which field).  A 200-character cut lost them in the first live run."""
     try:
         err = r.json().get("error")
     except ValueError:
@@ -473,7 +473,8 @@ class HTTPBackend(Backend):
         """The client, reopened if `close` closed it: `execute` closes its
         backend at the end, and the same backend may run again in this
         process (a retry of the error rows, a notebook re-run, several
-        shards in one loop).  Without this every call then failed."""
+        shards in one loop).  Without the reopen, every later call would
+        fail."""
         import httpx
         with self._client_lock:
             if self.client.is_closed:
@@ -523,7 +524,8 @@ class VLLMBackend(HTTPBackend):
 
     `revision` names the weights' revision (a git commit of the model
     repository, a checkpoint step).  vLLM does not report it, so two
-    revisions of one repository are one identity unless it is given.  It
+    revisions of one repository have one identity unless `revision` is
+    given.  It
     has no default: pass None to state that the weights are fixed by their
     path alone.
 

@@ -174,10 +174,10 @@ def cluster_bootstrap(df: pd.DataFrame, value: str, cluster: str = "cluster",
     replacement, keep every row of each drawn cluster, recompute `stat`.
 
     `stat` defaults to the unweighted mean over clusters of the within-
-    cluster mean -- i.e. every source item counts once regardless of how
-    many augmentations it spawned.  This is almost always what you want:
-    the row-weighted mean silently up-weights whichever items happened to
-    augment most, which is a property of your generator, not the model.
+    cluster mean, so every source item counts once regardless of how many
+    augmentations it spawned.  This is almost always what you want: the
+    row-weighted mean up-weights whichever items happened to get the most
+    augmentations, which is a property of your generator, not the model.
 
     A row with a value and no cluster label is refused (ValueError), never
     dropped: see `_require_clusters`.
@@ -279,9 +279,9 @@ def icc1(df: pd.DataFrame, value: str, cluster: str = "cluster") -> dict:
 
     m_0 is the variance-matched cluster size.  It reduces to m when the
     design is balanced and is what belongs in DEFF when it is not.
-    rho is clipped at 0 -- a negative moment estimate means the between-
-    cluster variance is not resolved by this much data, not that it is
-    negative.
+    rho is clipped at 0.  A negative moment estimate means that this much
+    data does not resolve the between-cluster variance, not that the
+    variance is negative.
     """
     d = df[[value, cluster]].dropna()
     g = d.groupby(cluster, observed=True)[value]
@@ -310,7 +310,7 @@ def effective_n(df: pd.DataFrame, value: str,
     if o["N"] == o["k"]:
         # No within-cluster replication: rho is not identifiable, but the
         # design effect is exactly 1 and n_eff = N. Returning NaN here would
-        # blank the column on the most common design of all -- one generation
+        # blank the column on the most common design of all: one generation
         # per item, no augmentation.
         return {**o, "rho": float("nan"), "deff": 1.0, "n_eff": float(o["N"])}
     if not np.isfinite(o["rho"]):
@@ -329,8 +329,8 @@ def wilson_interval(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
         half   = z sqrt(phat(1-phat)/n + z^2/4n^2) / (1 + z^2/n).
 
     Use for a single accuracy with INDEPENDENT items.  With repeats or
-    augmentations, use cluster_bootstrap instead -- Wilson has no way to
-    know that n rows are not n items.
+    augmentations, use cluster_bootstrap instead: Wilson treats the n rows
+    as n independent items.
     """
     if n == 0:
         return (float("nan"), float("nan"))
@@ -401,11 +401,11 @@ def summarize(df: pd.DataFrame, value: str, by: Sequence[str],
     marginal (an n-gram model, a published reference).  Either or both.
 
     `n_rows` counts the rows that carry `value`.  `n_excluded` counts the
-    rows of the cell that do not -- error, truncated and unparsed rows, or
-    a NaN from the scorer.  The bootstrap drops those, and before this
-    column it did so silently, so a cell could lose a third of its rows
-    and show a tight interval on the survivors.  `attrition` says which
-    category each one fell in.
+    rows of the cell that do not: error, truncated and unparsed rows, or
+    a NaN from the scorer.  The bootstrap drops those.  Before `n_excluded`
+    existed it dropped them without a count, so a cell could lose a third
+    of its rows and show a tight interval on the survivors.  `attrition`
+    says which category each one fell in.
 
     The verdict column is `above_floor_ci`, not `above_floor`: a point
     estimate above a floor is not evidence of being above it, and the CI is
@@ -496,8 +496,9 @@ def cell_caveats(rec: Mapping[str, Any]) -> list[str]:
       clusters themselves, and with few of them it underestimates it, so
       the interval is too narrow (SMALL_K_COVERAGE: a nominal 95% interval
       covers ~73% of the time at k = 3).
-    * No spread: every value identical, so the interval has zero width --
-      a statement about the sample, not certainty about the population.
+    * No spread: every value is identical, so the interval has zero
+      width.  That is a statement about the sample, not certainty about
+      the population.
     * Many excluded: rows without a value (errors, truncated, unparsed)
       are left out, so the estimate describes the survivors.  `attrition`
       says which rows are missing and why.

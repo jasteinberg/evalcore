@@ -2,9 +2,9 @@
 
 Contract.  A backend maps a list of `Request` to a list of `Response` of the
 same length and order.  It may raise `Transient` (retry) or `Fatal` (do not).
-It must NOT know about cells, items, clusters, or metrics -- everything above
-this line is backend-agnostic, which is what lets one core serve both a
-rate-limited HTTP API and a local batched forward pass.
+It must NOT know about cells, items, clusters, or metrics.  Everything above
+the backend layer is backend-agnostic, and that is what lets one core serve
+both a rate-limited HTTP API and a local batched forward pass.
 
 Batching is expressed by `complete_batch`.  The default maps `complete` over
 the list.  An HTTP backend leaves that alone and gets its throughput from the
@@ -24,9 +24,10 @@ from ..spec import digest
 
 
 class Transient(RuntimeError):
-    """Rate limit, timeout, 5xx -- worth retrying.  `retry_after` is the
-    delay the server asked for, in seconds, when it said.  The retry loop
-    waits at least that long instead of its own shorter guess."""
+    """A failure worth retrying: a rate limit, a timeout, a 5xx.
+    `retry_after` is the delay the server asked for, in seconds, when it
+    sent one.  The retry loop then waits at least that long instead of its
+    own shorter backoff."""
 
     def __init__(self, msg: str = "", retry_after: float | None = None) -> None:
         super().__init__(msg)
@@ -34,7 +35,8 @@ class Transient(RuntimeError):
 
 
 class Fatal(RuntimeError):
-    """Bad request, auth failure, content filter -- retrying will not help."""
+    """A failure that retrying will not fix: a bad request, an auth
+    failure, a content filter."""
 
 
 # Shapes that cross the backend boundary, named so signatures say what they
@@ -113,13 +115,14 @@ DECODE_KEYS = ("temperature", "top_p", "top_k", "max_tokens", "seed", "stop",
 
 def merge_params(default: Mapping[str, Any] | None,
                  params: Mapping[str, Any]) -> dict[str, Any]:
-    """Request params win, backend defaults fill gaps, nothing is invented."""
+    """The request's params, with the backend's defaults for the keys the
+    request does not set.  No other key is added."""
     return {**dict(default or {}), **dict(params)}
 
 
 def decode_signature(params: Mapping[str, Any]) -> str:
-    """Digest of the decode-relevant params only -- used to prove a batch is
-    homogeneous before it is run as one."""
+    """Digest of the decode params (DECODE_KEYS) alone.  Equal digests show
+    that a batch is homogeneous before it is run as one call."""
     return digest({k: params[k] for k in DECODE_KEYS if k in params})
 
 
@@ -127,7 +130,7 @@ def require(params: Mapping[str, Any], key: str, who: str) -> Any:
     """Fail loudly rather than substitute a provider-specific default.
 
     Anthropic requires max_tokens, OpenAI does not, and a local generate call
-    has its own idea.  Left implicit, one spec run against three
+    has its own default length.  Left implicit, one spec run against three
     backends gets three different generation budgets and the comparison is
     meaningless."""
     if params.get(key) is None:
@@ -145,10 +148,10 @@ def refuse_dropped(params: Mapping[str, Any], forwarded: Collection[str],
     Such a key is in the cell params, so it moves the cell id and the cache
     key, while the request actually sent is identical: two cells that look
     different are the same cell, and a sweep over the key reads as a clean
-    null result.  Refusing is deliberate where mapping might seem kinder --
-    which fields a provider accepts is a fact to check against its current
-    API reference, not to assume, and a refusal names the key so it can be
-    added to the adapter once checked."""
+    null result.  The key is refused rather than mapped to a guessed
+    provider field: which fields a provider accepts is a fact to check
+    against its current API reference.  The refusal names the key, so it
+    can be added to the adapter once checked."""
     dropped = sorted(k for k in DECODE_KEYS
                      if params.get(k) is not None and k not in forwarded)
     if dropped:
@@ -201,12 +204,12 @@ class Backend:
         served this one's cache or resume onto its rows.
 
         Every backend must define it.  There is no default.  A default can
-        only see what the base class knows (a name, `default_params`), and
-        a backend configured in `__init__` -- a model path, a revision, a
-        temperature held as an attribute -- would then share keys across
-        configurations.  Return a JSON-serialisable dict of what determines
-        the outputs.  Leave out what does not (a timeout, an API key), or
-        every change to it costs a full re-run.  Built-in backends start
+        only see what the base class knows (a name, `default_params`), so
+        two configurations of a backend set in `__init__` (a model path, a
+        revision, a temperature held as an attribute) would share keys.
+        Return a JSON-serialisable dict of what determines the outputs.
+        Leave out what does not (a timeout, an API key), or every change to
+        it costs a full re-run.  Built-in backends start
         from `_base_identity()`."""
         raise TypeError(
             f"{type(self).__name__} must define identity(): return a "
@@ -221,10 +224,10 @@ class Backend:
                                        or {})}
 
     def key_context(self, req: Request) -> dict[str, Any] | None:
-        """What of the unit beyond the request itself changes this backend's
-        response, or None.  `request_key` adds it to the key when it is not
-        None, so a backend that returns None (every backend but an agent
-        with context tools) keeps exactly the keys it had."""
+        """The parts of the unit, beyond the request itself, that change this
+        backend's response, or None.  `request_key` adds it to the key when
+        it is not None, so a backend that returns None (every backend but an
+        agent with context tools) keeps exactly the keys it had."""
         return None
 
     def refusal(self, req: Request) -> str | None:
@@ -233,8 +236,8 @@ class Backend:
         Checked before any call: by the runner for every request (a refusal
         becomes an error row, never a call), and by Experiment on every
         request at construction, so a task the backend cannot serve, even in
-        part, fails before any spend.  A backend with requirements of its own extends
-        this and calls super()."""
+        part, fails before any spend.  A backend with requirements of its own
+        extends this and calls super()."""
         name = type(self).__name__
         if req.tools and not self.supports_tools:
             return (f"{name} cannot send tools (supports_tools is False). "
@@ -330,9 +333,9 @@ def batch_with_retries(fn: Callable[[Sequence[Request]], list[Response]],
 
     A batch is retried as a unit, since one generate() call or one batched
     request is what failed.  A terminal failure becomes one error row per
-    request with the same prefixes as the single-request path -- never an
-    exception out of the runner, which would turn a single 429 into a dead
-    sweep."""
+    request, with the same error prefixes as the single-request path.  It
+    is never an exception out of the runner, which would turn a single 429
+    into a dead sweep."""
     return _retrying(lambda: fn(reqs),
                      lambda e: [Response(r.unit_id, error=e) for r in reqs],
                      seed if seed is not None else

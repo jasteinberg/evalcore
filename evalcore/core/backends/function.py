@@ -15,9 +15,9 @@ from .base import Backend, Request, Response
 class FunctionBackend(Backend):
     """`fn(request) -> str` (the text) or `-> Response` (anything richer).
 
-    `identity` is required: it is what the request key, and so the cache
-    and resume, know about the model behind `fn` -- a checkpoint path, a
-    revision, a server URL, sampling settings held outside the request.
+    `identity` is required: it is all that the request key, and so the
+    cache and resume, know about the model behind `fn` (a checkpoint path,
+    a revision, a server URL, sampling settings held outside the request).
     Two FunctionBackends with different models and the same identity would
     share results, which is the failure this argument exists to prevent.
 

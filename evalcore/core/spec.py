@@ -2,7 +2,7 @@
 
 A *cell* is one point in the configuration space of an experiment
 (model x prompt variant x decode params x dataset slice x seed).  A *unit*
-is one (cell, item, repeat) triple -- the thing that produces exactly one
+is one (cell, item, repeat) triple: the thing that produces exactly one
 model call and exactly one row in the tidy frame.
 
 Identity is content-addressed: cell_id = blake2b of the canonical JSON of
@@ -71,7 +71,8 @@ class Cell:
         return self.params.get(key, default)
 
     def merged(self) -> dict[str, Any]:
-        """Flat dict for the tidy frame: params first, tags cannot shadow."""
+        """Flat dict for the tidy frame.  Params are applied after tags, so
+        a tag cannot shadow a param of the same name."""
         return {**self.tags, **self.params, "cell_id": self.id}
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
@@ -115,8 +116,8 @@ def grid(axes: Mapping[str, Sequence[Any]],
 class Item:
     """One dataset element.  `item_id` is the CLUSTER label used by every
     bootstrap downstream, so it must be stable across conditions and must be
-    shared by all augmentations derived from the same source element --
-    that sharing is the whole reason the design effect is computable."""
+    shared by all augmentations derived from the same source element.
+    That sharing is what makes the design effect computable."""
 
     item_id: str
     payload: Mapping[str, Any]
@@ -131,7 +132,7 @@ class Item:
 
 @dataclass(frozen=True)
 class Unit:
-    """(cell, item, repeat) -- one model call, one row."""
+    """(cell, item, repeat): one model call, one row."""
 
     cell: Cell
     item: Item

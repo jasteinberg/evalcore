@@ -6,8 +6,8 @@ and counts how often each contains mu:
 
   cluster bootstrap, BCa         (what `summarize` reports)
   cluster bootstrap, percentile
-  row bootstrap, percentile      (ignores the clustering; covers less by
-                                  the factor DEFF = 1 + (m-1) rho in variance)
+  row bootstrap, percentile      (ignores the clustering, so its variance
+                                  is too small by DEFF = 1 + (m-1) rho)
 
 Prints the table and writes a figure with every measured value labelled
 and binomial 1-SE bars, sqrt(c(1-c)/R).  These numbers are the source of

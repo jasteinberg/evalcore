@@ -5,8 +5,8 @@
     model turn -> zero or more tool calls -> results appended -> repeat
 
 until the model answers without calling a tool, or a cap is hit.  Because
-the loop is a backend, the runner, cache, resume and attrition need nothing
-new: one unit is one episode and one row, and the row's meta holds the
+the loop is a backend, the runner, cache, resume and attrition need no
+changes: one unit is one episode and one row, and the row's meta holds the
 whole trajectory.
 
 Outcomes, and the row status each becomes:
@@ -25,8 +25,8 @@ first" is a meaningful control, but forced on every turn the model could
 never answer without a tool call, and every episode would run to max_turns.
 
 Tool results can be cached content-addressed on (tool identity,
-arguments).  With live tools -- a web search whose results drift -- that
-cache is what makes a rerun see the same results, so pass one.
+arguments).  With live tools, such as a web search whose results drift,
+that cache is what makes a rerun see the same results, so pass one.
 
 A sandbox (sandbox.py) gives each episode its own container: started
 before the first turn, removed when the episode ends, however it ends.
@@ -37,8 +37,8 @@ A container that fails to start is a `tool_error` row.
 A context tool (Tool.uses_context, see tools.py) is also given the unit it
 serves, and its cached results are keyed on (item_id, repeat) as well.  An
 agent holding one also puts the item into its request key (key_context), so
-two items whose prompts happen to coincide never share an episode.  Without
-context tools, keys are exactly as before.
+two items whose prompts happen to coincide never share an episode.  An
+agent without context tools leaves the item out of its request key.
 """
 
 from __future__ import annotations
@@ -103,7 +103,8 @@ class AgentBackend(Backend):
                 "tools": [t.identity() for t in self.tools.values()],
                 "max_turns": self.max_turns,
                 "max_tool_calls": self.max_tool_calls,
-                # absent without one, so existing identities hold
+                # absent without a sandbox, so the identity of an agent
+                # without one does not change
                 **({"sandbox": self.sandbox.identity()}
                    if self.sandbox is not None else {})}
 
@@ -148,8 +149,8 @@ class AgentBackend(Backend):
         try:
             session.close()
         except ToolUnavailable as exc:
-            # the episode's answer stands, and the leaked container is
-            # said on the row and as a warning, not swallowed
+            # the episode's answer stands.  The container left running is
+            # reported on the row and as a warning
             warnings.warn(f"unit {req.unit_id}: {exc}", RuntimeWarning,
                           stacklevel=2)
             r.meta = {**(r.meta or {}), "sandbox_close_error": str(exc)}

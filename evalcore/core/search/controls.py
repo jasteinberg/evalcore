@@ -50,9 +50,9 @@ def _check_mode(mode: str) -> None:
 
 
 def _gold_set(ids: Iterable[str]) -> list[str]:
-    """Gold ids sorted and deduplicated: the form the controls use and their
-    identities digest, so the order a gold list was given in is not part of
-    it."""
+    """Gold ids sorted and deduplicated.  The controls use this form and
+    their identities digest it, so the order in which a gold list was given
+    does not change an identity."""
     return sorted(set(ids))
 
 
@@ -103,8 +103,8 @@ class GoldControl:
 def _control_hits(ids: list[str], s: np.ndarray, gold: Sequence[str],
                   mode: str, k: int, label: str) -> list[Hit]:
     """none / oracle / removed (module docstring) for one ranking: `s` is
-    every document's score, columns in `ids` order.  The one implementation,
-    for GoldControl and gold_search_tool alike."""
+    every document's score, columns in `ids` order.  GoldControl and
+    gold_search_tool both use this one implementation."""
     col = {d: j for j, d in enumerate(ids)}
     unknown = [d for d in gold if d not in col]
     if unknown:

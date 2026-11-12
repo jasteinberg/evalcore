@@ -1,4 +1,4 @@
-"""evalcore -- a small, backend-agnostic evaluation harness.
+"""evalcore: a small, backend-agnostic evaluation harness.
 
 Start here:
 

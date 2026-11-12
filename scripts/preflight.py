@@ -29,8 +29,8 @@ the provider what it serves.
     python scripts/preflight.py --provider anthropic --model <name> \\
         --prompt-file prompt.txt --max-tokens 512 --n 10 --units 2400
 
-The measurement is `evalcore.core.calibrate` -- the same code the pipeline
-runs before an experiment -- so this script only parses arguments and
+The measurement is `evalcore.core.calibrate`, the same code the pipeline
+runs before an experiment, so this script only parses arguments and
 prints.  Exit status: 0 if every call succeeded, 1 if one failed, 2 if no
 API key.
 

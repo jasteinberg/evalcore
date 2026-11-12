@@ -1,6 +1,6 @@
 r"""Questions that can only be answered by searching, generated.
 
-A seeded world of invented entities -- towns, rivers, people -- each with a
+A seeded world of invented entities (towns, rivers, people), each with a
 few facts, written up as one short document per entity.  Names are built
 from syllables, so no model knows them: an answer has to come from the
 documents, which makes this a test of searching and composing, not of
@@ -18,10 +18,10 @@ near-misses and the model has to read which document answers.
 `meta["hops"]` counts the facts an answer composes, not a minimum number of
 searches: town documents also name their river, so a well-chosen query can
 return the river's document and the town's together (observed in a live
-run, 2 Oct).  Report `meta_n_tool_calls` beside accuracy for search
-efficiency.  Run the
-same items with no tools for the closed-book baseline: accuracy there
-should sit at the floor, and the gap is what tool use buys.
+run, 2 Oct).  Report `meta_n_tool_calls` beside accuracy as the measure
+of search efficiency.  Run the same items with no tools for the
+closed-book baseline: accuracy there should sit at the floor, and the
+gap between the two is the accuracy that tool use adds.
 
 Each answer is scored as one of three outcomes, correct, wrong or
 abstained (grader specs carry "abstain": true, see graders.grade), so a
@@ -52,10 +52,11 @@ _ON, _NUC, _CODA = ("b br d k l m n r s st t th v z".split(),
                     "a e i o u ae ia".split(), "n r s l th nd rn st".split())
 
 # The prompt does not promise that the answer is in the collection: under a
-# gold control that removes its documents the promise is false, and it
-# pushes the model to answer from a near-name distractor instead of
-# declining.  The fixed abstention phrase is one of the `abstain` grader's
-# cues, so a refusal can be recognised rather than left unparsed.
+# gold control that removes its documents the promise is false, and a
+# false promise pushes the model to answer from a near-name distractor
+# instead of declining.  The fixed abstention phrase is one of the
+# `abstain` grader's cues, so a refusal can be recognised rather than left
+# unparsed.
 SYSTEM = ("Answer the question. You can search a document collection. Reply "
           "with the answer only. If the documents do not contain the answer, "
           "reply: cannot answer.")

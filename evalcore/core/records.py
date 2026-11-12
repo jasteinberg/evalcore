@@ -6,7 +6,7 @@ the reader that turns a sink into the tidy frame.
   the fragment, never by rewriting what is already on disk.
 * The manifest is a record of intent written before the first call: what a
   sweep was going to do, so units never attempted can be counted.  It is
-  never a second source of truth -- resume reads the sink.
+  never a second source of truth: resume reads the sink.
 """
 
 from __future__ import annotations
@@ -47,9 +47,10 @@ def write_atomic(path: Path, write: Callable[[Path], object],
     one path at once (repeats of an identical request at a non-zero
     temperature are identical by construction), and with a shared temp
     the second os.replace raises FileNotFoundError because the first
-    already moved the file away.  Unique temp, last writer wins, still
-    atomic.  `suffix` ends the temp name: np.savez appends ".npz" to a
-    name not already ending so, and readers skip names ending ".tmp.npz"."""
+    already moved the file away.  With a unique temp name the last writer
+    wins, and each write is still atomic.  `suffix` ends the temp name:
+    np.savez appends ".npz" to a name not already ending in it, and
+    readers skip names ending ".tmp.npz"."""
     tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}{suffix}")
     write(tmp)
     os.replace(tmp, path)
@@ -58,13 +59,13 @@ def write_atomic(path: Path, write: Callable[[Path], object],
 class SinkState:
     """What a sink already holds, read without opening it for writing:
     for each unit_id its LAST row's request_key (None for rows written
-    before request keys existed) and whether that row errored, last-wins
-    as in `to_frame`, plus how many lines could not be read."""
+    before request keys existed) and whether that row errored (the last
+    row wins, as in `to_frame`), plus how many lines could not be read."""
 
     def __init__(self, path: str | Path, keep_rows: bool = False) -> None:
         self.seen: dict[str, str | None] = {}
         self.errored: set[str] = set()
-        # each unit's last row, for a re-score (only when asked: memory)
+        # each unit's last row, for a re-score (kept only when asked: memory)
         self.rows: dict[str, Mapping[str, Any]] = {}
         self.keep_rows = keep_rows
         self.batch: dict[str, int | None] = {}     # batch size of the last row
@@ -99,10 +100,11 @@ def _write_line(fd: int, rec: Mapping[str, Any], path: Path,
     O_APPEND makes each write land at the current end of the file, and a
     single write to a local regular file is not interleaved with another
     process's.  A buffered file object gives neither guarantee per record.
-    It flushes in fixed-size chunks, so a record can straddle two writes and
-    a concurrent writer's record can land between its halves (a torn line,
-    dropped on read).  Two O_APPEND writes never interleave, but a reader
-    can see one in progress (Linux grows the file page by page), so
+    A buffered file flushes in fixed-size chunks, so a record can straddle
+    two writes and a concurrent writer's record can land between its halves
+    (a torn line, dropped on read).  Two O_APPEND writes never interleave,
+    but a reader can see one in progress (Linux grows the file page by
+    page), so
     `_terminate_partial_line` in another writer can take a live record for
     a crash fragment.  Its newline is itself an append, so it lands after
     the live record, and the cost is a blank line, which every reader
@@ -144,9 +146,10 @@ class AppendLog:
 
 class SinkLog(AppendLog):
     """The run's sink: an AppendLog that keeps a SinkState current as rows
-    are written, so resume decisions after the first read never read the
-    file again.  Build the state before this log: the state's read counts
-    a crash fragment that opening the log then terminates."""
+    are written, so resume decisions after the first read do not read the
+    file again.  Build the state before this log: opening the log
+    terminates a crash fragment, and the state must read the sink first to
+    count that fragment as unreadable."""
 
     def __init__(self, path: str | Path, state: SinkState) -> None:
         self.state = state
@@ -162,8 +165,8 @@ def _terminate_partial_line(path: Path) -> bool:
     A process killed inside `write` leaves a fragment with no newline.
     Appending after it glues the next record onto the fragment, and the
     reader then loses both: the interrupted unit is re-run on resume, and
-    its fresh row is unreadable too, which on the sink also made every later
-    `to_frame` raise.  Terminating the fragment confines the damage to the
+    its fresh row is unreadable too.  On the sink, every later `to_frame`
+    also raised.  Terminating the fragment confines the damage to the
     one record the crash interrupted, and rewrites nothing already on disk.
     """
     if not path.exists() or path.stat().st_size == 0:
@@ -179,14 +182,14 @@ def _terminate_partial_line(path: Path) -> bool:
 
 # --- the plan manifest ------------------------------------------------------
 # One record per PLANNED unit, written before the first call.  The record is
-# `Unit.row()` -- the same identity columns the tidy frame carries -- so the
+# `Unit.row()`, the same identity columns the tidy frame carries, so the
 # manifest joins to the frame on unit_id and can be grouped by any cell
 # param or tag without a second lookup table.
 #
 # Why the plan has to be on disk rather than inferred: units are dispatched
 # cell-major (`spec.units` loops cells, then items, then repeats), so a
 # sweep killed at fraction f of the plan does not lose a uniform 1-f of every
-# cell -- it loses the LAST cells entirely.  The missingness is maximally
+# cell.  It loses the LAST cells entirely.  The missingness is maximally
 # confounded with the grid axis, which is the one thing a per-cell table is
 # meant to contrast.  Inferring "we probably meant to run more" from the
 # frame is impossible for exactly the cells where it matters: a cell with
@@ -199,8 +202,8 @@ def manifest_path(out: str | Path) -> Path:
     Built from the sink's full name rather than its stem, so the map is
     injective.  On the stem, `runs.jsonl` and `runs.json` in one directory
     share a manifest, and each sweep then reports the other's units as
-    never attempted -- inventing precisely the number this file exists to
-    report.  An ugly name is cheaper than a fabricated one.
+    never attempted.  That fabricates precisely the number this file
+    exists to report.  An ugly name is cheaper than a fabricated one.
     """
     q = Path(out)
     return q.with_name(q.name + MANIFEST_SUFFIX)
@@ -212,8 +215,8 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
     Append rather than rewrite, for the same reason the sink is append-only.
     A read-modify-write loses the plan of any concurrent writer: two
     processes sharding one sweep both read the file, both write their own
-    union, and the second erases the first -- a silent loss of exactly the
-    evidence this file exists to keep.  Appends never lose a record.  At
+    union, and the second erases the first.  That silently loses exactly
+    the evidence this file exists to keep.  Appends never lose a record.  At
     worst two writers both append the same unit, and `read_manifest`
     deduplicates on the way in.
 
@@ -221,9 +224,9 @@ def write_manifest(units: Iterable[Unit], path: str | Path) -> Path:
     that planned 200, died at 50 and is restarted with `limit=60` must still
     report the 140 nobody has ever attempted.
 
-    First record of a unit_id wins, since re-appending an already-planned
-    unit to refresh a renamed tag would grow the file on every resume for a
-    field that bears no identity.
+    The first record of a unit_id wins.  Re-appending an already-planned
+    unit to refresh a renamed tag would grow the file on every resume, for
+    a field that is not part of the unit's identity.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,10 +239,10 @@ def append_plan(path: Path, units: Iterable[Unit], have: set[str]) -> None:
     """Append the units whose ids are not in `have` to the manifest at
     `path`, then fsync, then add their ids to `have`.  `have` is what the
     manifest already records: `write_manifest` reads it from the file, a
-    `Runner` holds it in memory.  It learns an id only once the record is
-    on disk: if the write raises, a retried call appends it again rather
-    than run a unit the manifest never planned.  The caller holds
-    `_MANIFEST_LOCK`."""
+    `Runner` holds it in memory.  An id is added to `have` only once its
+    record is on disk.  If the write raises, a retried call appends the
+    record again, so no unit runs without a record in the manifest.  The
+    caller holds `_MANIFEST_LOCK`."""
     _terminate_partial_line(path)
     fresh: dict[str, Mapping[str, Any]] = {}
     for u in units:
@@ -349,10 +352,10 @@ def row_status(df: pd.DataFrame) -> pd.Series:
 # --- numpy values and array sidecars ------------------------------------------
 # A response's meta may carry numpy or torch values from a probe.  JSON
 # would stringify a scalar silently (a float32 0.25 came back as the string
-# "0.25", a torch scalar as "tensor(0.2500)") and refuse an array outright,
-# so: scalars become Python numbers at any depth, nested arrays become
-# lists, and top-level arrays -- per-head or per-layer tensors, megabytes per
-# unit -- go to an .npz sidecar named by the unit's request key, with only
+# "0.25", a torch scalar as "tensor(0.2500)") and refuse an array outright.
+# So scalars become Python numbers at any depth, nested arrays become
+# lists, and top-level arrays (per-head or per-layer tensors, megabytes per
+# unit) go to an .npz sidecar named by the unit's request key, with only
 # its path left in the row.  Torch is duck-typed (`detach`): no torch import.
 
 def _is_tensor(o: object) -> bool:
@@ -377,7 +380,8 @@ def _plain(v: object) -> object:
     else JSON cannot hold (a date, a Path, a set) made its string, so the
     cache (plain `json.dumps`) and the sink store the same thing, and a
     scorer sees the same meta on a fresh call as on a cache hit.  Without
-    the last step a cache write raised after the call was paid for."""
+    the last conversion, a cache write would raise after the call was
+    paid for."""
     if isinstance(v, dict):
         return {k: _plain(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):

@@ -1,5 +1,6 @@
 """A task: the items, how each becomes a request, and how a response is
-scored -- one object instead of three loose arguments to `execute`."""
+scored, held in one object instead of passed to `execute` as three
+separate arguments."""
 
 from __future__ import annotations
 
@@ -25,11 +26,11 @@ class Task:
     messages and grader), so a task loaded from a file needs no code.
 
     `name` and `version` are written into every row and the plan manifest
-    as cell TAGS -- tags carry no identity, so naming or re-versioning a
-    task never invalidates the cache.  Changing what a task asks changes the
-    rendered requests, and resume re-runs exactly those units on its own
-    (the request key covers them).  Bump `version` when the scoring
-    changes: `run` (and the pipeline) pass it to `execute` as
+    as cell TAGS.  Tags are not part of the request key, so renaming or
+    re-versioning a task never invalidates the cache.  Changing what a task
+    asks changes the rendered requests, and resume re-runs exactly those
+    units on its own (the request key covers them).  Bump `version` when
+    the scoring changes: `run` (and the pipeline) pass it to `execute` as
     `score_version`, so rows scored under the old version are re-scored
     from their stored responses, with no model call."""
 

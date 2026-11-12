@@ -118,9 +118,10 @@ def merge_shards(out: str | Path, n: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     shards of `out`.  Pass the plan to `attrition(..., manifest=)`.
 
     A shard with no sink is not an error: its units are in the other
-    shards' manifests and are counted missing.  No sink at all is, and so
-    is a unit with rows in two shards, which means two partitions were
-    mixed (n changed under one file name, or a file was copied)."""
+    shards' manifests and are counted missing.  No sink at all is an
+    error, and so is a unit with rows in two shards, which means two
+    partitions were mixed (n changed under one file name, or a file was
+    copied)."""
     paths = [shard_path(out, i, n) for i in range(n)]
     sinks = [p for p in paths if p.exists()]
     if not sinks:

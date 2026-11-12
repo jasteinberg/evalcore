@@ -1,5 +1,5 @@
 """python -m evalcore run config.json [--dry-run] [--yes] [--recalibrate]
-                                     [--shard I/N | --shard slurm]
+                                     [--shard I/N | slurm | k8s/N]
 python -m evalcore merge config.json --shards N
 python -m evalcore summarize runs/sweep.jsonl
 python -m evalcore list [kind] [--plugin module_or_file.py ...]"""

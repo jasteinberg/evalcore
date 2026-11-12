@@ -13,9 +13,9 @@ Design commitments, each of which is a lesson rather than a preference:
   unit whose prompt, item payload, backend or backend defaults changed is
   re-run rather than silently kept.
 * Errors become ROWS, not exceptions.  A cell that fails on 3 of 200 items
-  is a result with n=197 and a documented attrition, not a crashed run --
-  but the attrition is written down, because silent dropping is how an
-  eval acquires a bias nobody can see afterwards.
+  is a result with n=197 and a documented attrition, not a crashed run.
+  The attrition is written down, because silent dropping is how an eval
+  acquires a bias nobody can see afterwards.
 * Scoring is separated from generation.  `score` runs on the response, so
   changing a metric costs a re-score, not a re-run.  Pass `score_version`
   (the pipeline and `Task.run` pass `Task.version`): every row records the
@@ -39,9 +39,9 @@ Design commitments, each of which is a lesson rather than a preference:
   for `status == "truncated"` before summarizing, and say so.
 * The PLAN is written down before the first call.  Without it, a sweep that
   dies partway leaves no evidence it was ever going to do more work: the
-  frame contains what came back, and units never attempted are indis-
-  tinguishable from units never planned.  The manifest is a record of
-  intent, not a second source of truth -- resume reads the JSONL, and a
+  frame contains what came back, and units never attempted are
+  indistinguishable from units never planned.  The manifest is a record of
+  intent, not a second source of truth: resume reads the JSONL, and a
   stale or absent manifest costs information, never correctness.
 """
 
@@ -156,8 +156,8 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
 
     A unit counts as done only if its last row is a result: one whose
     request_key matches the request it renders to now and which is not an
-    error.  An error row records a failed attempt -- a 429 storm that
-    outlasted the retries, an outage, a harness bug -- so it is attempted
+    error.  An error row records a failed attempt (a 429 storm that
+    outlasted the retries, an outage, a harness bug), so it is attempted
     again unless `retry_errors=False` (for a deterministic refusal that
     would only fail again at a cost).  A changed prompt, item, backend or
     backend default changes the request_key, so the unit is redone and the
@@ -167,9 +167,10 @@ def plan(units: Iterable[Unit], backend: Backend, render: Render,
     scored under another version (or none) goes to `rescore`: its response
     is read back from the row and scored again, without a call.
 
-    With `batch_size` given and a backend whose numerics padding can change
-    (`supports_target`: a local model), a row made at another batch size
-    (or an unrecorded one) is stale, so one sink never mixes batch sizes."""
+    With `batch_size` given and a local model (`supports_target`), whose
+    outputs can change with the padding of a batch, a row made at another
+    batch size (or with none recorded) is stale, so one sink never mixes
+    batch sizes."""
     units = list(units)[:limit]
     return _plan(units, backend, render,
                  SinkState(out, keep_rows=score_version is not None),
@@ -181,10 +182,10 @@ def _plan(units: list[Unit], backend: Backend, render: Render,
           score_version: str | None, batch_size: int | None,
           content: dict[str, str] | None = None) -> Plan:
     """`plan` against a sink state already in memory.  `content` carries
-    the clash check across calls (see `_refuse_clashes`).  It learns the
-    units' items only once every unit has rendered, so a unit whose render
-    raised (and which therefore wrote no row) is not remembered: corrected
-    and run again, it is planned as if it had never been seen."""
+    the clash check across calls (see `_refuse_clashes`).  The units'
+    items are added to `content` only after every unit has rendered.  A
+    unit whose render raised wrote no row and is not added, so once
+    corrected and run again it is planned as a new unit."""
     new = _refuse_clashes(units, content)
     keys = {u.id: request_key(rendered(render, u), u.repeat, backend)
             for u in units}
@@ -331,7 +332,7 @@ def _join(reqs: Sequence[Request],
 
     The backend contract is "same length and order", but a batched backend
     that collects results as they complete, or loses one, breaks it without
-    raising -- and a positional zip then writes one unit's answer into
+    raising.  A positional zip would then write one unit's answer into
     another unit's row, which no statistic downstream can detect.  A request
     left without a response becomes an error row, not a neighbour's answer.
     """
@@ -393,9 +394,10 @@ def _sidecar(ctx: _Context, rkey: str) -> str:
     """A row's `meta_arrays`: the sidecar's path relative to THIS sink.
 
     Computed per sink, never taken from the cache: the cached meta carries
-    the path relative to whichever sink first wrote it, which from a sink
-    in another directory points at nothing (or at another file).  The
-    sidecar itself is keyed on the request key, so it is the same file."""
+    the path relative to whichever sink first wrote it.  Read from a sink
+    in another directory, that path names a missing file or a different
+    one.  The sidecar itself is keyed on the request key, so it is the
+    same file."""
     f = ctx.store.path(rkey)
     if not f.exists():
         raise FileNotFoundError(
@@ -408,7 +410,7 @@ def _row(u: Unit, rkey: str, rp: Response, score: Score,
          score_version: str | None = None,
          batch_size: int | None = None) -> dict[str, Any]:
     """The result row: identity columns, the response, a status, and the
-    scores -- which only an `ok` response gets."""
+    scores, which only an `ok` response gets."""
     meta = rp.meta or {}
     row = {**u.row(), "text": rp.text, "error": rp.error, "cached": rp.cached,
            "request_key": rkey, **{f"meta_{k}": v for k, v in meta.items()}}
@@ -469,33 +471,35 @@ class Runner:
     """Execute units against one sink, a call (or a batch) at a time, with
     the sink's state and the manifest held in memory.
 
-    For a sequential caller, whose next unit depends on the previous
-    unit's output and so cannot be handed over in a batch.  N single-unit
-    `execute` calls into one sink read the whole sink and manifest N times
-    (O(N^2) lines parsed).  A Runner reads each once, when constructed.
-    Each `run` then appends the unit's row, its manifest record (if not
-    already recorded) and its events, and reads nothing:
+    A Runner is for a sequential caller, whose next unit depends on the
+    previous unit's output and so cannot be part of one batch.  N
+    single-unit `execute` calls into one sink read the whole sink and
+    manifest N times (O(N^2) lines parsed).  A Runner reads the sink and
+    the manifest once, when it is constructed.  After that, each `run`
+    only appends: the unit's row, its manifest record (if the manifest
+    does not have it yet) and its events.  No file is read again:
 
         with Runner(backend, render, score, out, cache=cache) as r:
             row = r.run(unit)          # the unit's row, as written
 
-    `execute` is built on this class, so the resume, retry, cache, sidecar
-    and manifest semantics are one implementation.  A unit already done is
-    returned from the sink with no call.  A stale or errored one is
-    redone, and one finished under another `score_version` is re-scored
-    (see `plan`).  The event log gets one run_start when the Runner opens
-    and one run_end when it closes cleanly, with each unit's events
-    between.  A Runner left by an exception closes without a run_end, so
-    the log says the run was killed, as for `execute`.  A `run` refused
-    before any call (an item_id reused for another item, a cell name that
-    clashes with a runner column) writes no row and logs a `refused` event
-    with the reason, then raises.  Caught, the Runner carries on.  Not
-    caught, it is that exception that ends the run.
+    `execute` is built on this class, so the resume, retry, cache, sidecar and
+    manifest semantics are one implementation.  A unit already done is returned
+    from the sink with no call.  A stale or errored one is redone, and one
+    finished under another `score_version` is re-scored (see `plan`).  The
+    event log gets one run_start when the Runner opens and one run_end when it
+    closes cleanly, with each unit's events between.  A Runner exited through
+    an exception closes without a run_end, so the log shows the run was killed,
+    as for `execute`.  A `run` refused before any call (an item_id reused for
+    another item, a cell name that clashes with a runner column) writes no row
+    and logs a `refused` event with the reason, then raises.  If the caller
+    catches that exception, the Runner stays open for further units.  If not,
+    it ends the run.
 
     The clash check spans every unit the Runner has planned, so an item_id
     reused with another payload is refused.  N single-unit `execute` calls
-    did not check across calls: the later row silently superseded the
-    earlier one.  That is the one way a Runner's rows differ from theirs.
+    do not check across calls, so there the later row silently supersedes
+    the earlier one.  This is the only difference between a Runner's rows
+    and the rows of N `execute` calls.
 
     Nothing between the call to `run` and the backend's call draws from a
     global random generator (Python's, numpy's or torch's), so a caller
@@ -504,16 +508,17 @@ class Runner:
     The sink's rows (each unit's last) are held in memory, so that a done
     unit's row is returned without reading the file: memory grows with the
     sink.  (`execute`'s Runner holds them only while planning a re-score.)
-    One caller thread: `workers` parallelises within a `run_batch`, not
-    across concurrent calls.
+    A Runner is called from one thread: `workers` parallelises the calls
+    within one `run_batch`, not concurrent calls to `run`.
 
     One writer per sink.  The state is read once, so rows another process
-    appends to the same sink while this Runner is open are not seen: both
-    could call the same unit, and resume answers from this Runner's view.
-    Shards write separate sinks (see `execute`).  An incremental caller is
-    not sharded: `run` is given units one at a time, so the manifest could
-    not record the whole plan before the first call, which is what lets
-    `merge_shards` count a shard that never started.
+    appends to the same sink while this Runner is open are not seen.  Both
+    processes could call the same unit, and this Runner's resume decisions
+    see only its own view of the sink.  Shards write separate sinks (see
+    `execute`).  A Runner is not sharded: `run` receives units one at a
+    time, so the manifest cannot record the whole plan before the first
+    call, and `merge_shards` needs that whole plan to count the units of
+    a shard that never started.
     """
 
     def __init__(self, backend: Backend, render: Render, score: Score,
@@ -633,8 +638,8 @@ class Runner:
 
     def close(self, killed: bool = False) -> None:
         """Close the sink and the backend, then emit run_end and close the
-        event log -- unless `killed`, when the log is left without a
-        run_end, which is how it says the run did not finish."""
+        event log.  With `killed`, no run_end is written: a log without
+        one records a run that did not finish."""
         if self.closed:
             return
         self.closed = True
@@ -715,11 +720,11 @@ class Runner:
                  f"sink, {t['rescored']} re-scored, {t['stale']} stale and "
                  f"{t['retried']} errored units redone")
         if self.mpath is not None:
-            # Against the manifest, not this invocation's units: a narrowed
-            # resume (a `limit=`, one condition re-run) is exactly the case
-            # where the shortfall is invisible from the call site.  Under a
-            # shard, only this shard's units: the others are other
-            # processes' work, not this one's shortfall.
+            # Counted against the manifest, not this invocation's units: a
+            # narrowed resume (a `limit=`, one condition re-run) is exactly
+            # the case where the shortfall is invisible from the call site.
+            # Under a shard, only this shard's units count, since the
+            # others are other processes' work.
             never = len({u for u in self.planned if self.mine(u)}
                         - self.state.seen.keys())
             if never:
@@ -740,12 +745,12 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
     """Execute `units`, writing one row per unit to `out` (JSONL), and
     return the frame.
 
-    workers x batch_size is the concurrency knob.  HTTP: workers=8..16,
+    workers x batch_size sets the concurrency.  HTTP: workers=8..16,
     batch_size=1.  Local HF: workers=1, batch_size=8..32 (one process owns
     the device, and threads would only contend for it).
 
     The plan is written to `manifest` (default: a sibling of `out`) BEFORE
-    the first call, so a sweep killed midway is still accountable -- pass
+    the first call, so a sweep killed midway is still accountable: pass
     that file to `attrition` to see the units nobody ever attempted.  Every
     unit, retry and run boundary is appended to `<out>.events.jsonl`
     (`events=False` disables it).  Resume decisions: see `plan`.
@@ -774,8 +779,8 @@ def execute(units: Iterable[Unit], backend: Backend, render: Render, score: Scor
                _keep_rows=score_version is not None)
     p = r._plan_units([u for u in everything if r.mine(u.id)])
     # p.rows holds the rows a re-score reads.  Nothing else in execute
-    # reads the state's rows, so it stops keeping them (and every row
-    # written from here on): memory stays at the plan's, as before Runner.
+    # reads the state's rows, so the state drops them and keeps none of
+    # the rows written from here on.  Memory then stays at the plan's.
     r.state.keep_rows = False
     r.state.rows.clear()
     r._record(everything)                 # intent, before any execution

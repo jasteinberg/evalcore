@@ -3,7 +3,7 @@ r"""Retrieval over a local corpus: lexical, dense, exact and approximate.
 A `Retriever` maps queries to ranked (doc id, score) lists and has an
 `identity()`.  Four are here, all offline:
 
-    BM25             lexical, exact, no model -- the default search tool
+    BM25             lexical, exact, no model (the default search tool)
     DenseRetriever   an Embedder plus an Index
     Reranker         any retriever's top `depth`, rescored by a PairScorer
                      (a function, or an HF cross-encoder)

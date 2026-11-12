@@ -74,7 +74,7 @@ class Reranker:
     them against the query, and the top k by (score desc, id asc) are
     returned.  A document the first stage misses at `depth` cannot be
     recovered, so recall@depth of the first stage bounds the reranker's
-    recall at any k -- evaluate the first stage at `depth` to see that
+    recall at any k.  Evaluate the first stage at `depth` to see that
     ceiling."""
 
     def __init__(self, first: Retriever, scorer: PairScorer,
@@ -84,7 +84,8 @@ class Reranker:
 
     @property
     def uses_repeat(self) -> bool:
-        """The first stage's: a reranked sampled draw is still a draw."""
+        """Whether the first stage's draw depends on the repeat index: a
+        reranked sampled draw is still a random draw."""
         return _uses_repeat(self.first)
 
     def identity(self) -> dict[str, Any]:

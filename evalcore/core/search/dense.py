@@ -93,11 +93,11 @@ class ExactIndex(Index):
 class FaissIndex(Index):
     """FAISS, imported here only.  kind "hnsw" (m, ef_construction,
     ef_search) or "ivf" (nlist, nprobe), which is trained on the corpus
-    itself.  Cosine is inner product on normalised vectors.  HNSW built on
-    several threads need not be bit-reproducible, and the measured
-    ann_recall is the guard.  On macOS with pip wheels, faiss and torch
-    cannot share a process (`omp_clash`), so `build` refuses with the reason
-    rather than let the process abort."""
+    itself.  Cosine is inner product on normalised vectors.  An HNSW index
+    built on several threads is not guaranteed to be bit-reproducible, and
+    the measured ann_recall reports any recall that costs.  On macOS with
+    pip wheels, faiss and torch cannot share a process (`omp_clash`), so
+    `build` refuses with the reason rather than let the process abort."""
 
     exact = False
 
@@ -152,9 +152,10 @@ def omp_clash() -> str | None:
 
     On macOS the pip wheels of torch and faiss-cpu each bundle their own
     libomp, and a process that loads both is killed by the OpenMP runtime
-    (OMP Error #15) -- an abort, not an exception, so it cannot be caught
-    afterwards.  This checks for exactly that pair before faiss is imported:
-    torch already loaded, faiss not yet, both carrying a bundled libomp."""
+    (OMP Error #15).  That is an abort, not an exception, so it cannot be
+    caught afterwards.  This checks for exactly that pair before faiss is
+    imported: torch already loaded, faiss not yet, both carrying a bundled
+    libomp."""
     if sys.platform != "darwin" or "faiss" in sys.modules:
         return None
     torch = sys.modules.get("torch")

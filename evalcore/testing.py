@@ -1,8 +1,8 @@
 """Regression checks: two outputs that must agree, and stored snapshots.
 
 `assert_same(a, b, rtol=, atol=)` compares two results that must be equal
--- batched vs one at a time, a cached prefix vs a full pass, a resumed run
-vs an uninterrupted one -- through nested dicts, lists, numpy arrays,
+(batched vs one at a time, a cached prefix vs a full pass, a resumed run
+vs an uninterrupted one) through nested dicts, lists, numpy arrays,
 array-likes with `.detach()` (torch, read without importing it) and pandas
 frames.  Every mismatch is reported with its path, not only the first, so a
 failure says how much moved and where.  A number x matches y when

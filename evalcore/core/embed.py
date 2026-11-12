@@ -1,8 +1,8 @@
 """Text embeddings as model calls: identified, cached, and batched.
 
 An `Embedder` maps texts to vectors.  Like a backend, it has an
-`identity()` -- everything that changes the vectors -- and every vector is
-cached under
+`identity()` naming everything that changes the vectors, and every vector
+is cached under
 
     key = digest(embedder identity, role, text)
 
@@ -51,7 +51,7 @@ class EmbeddingCache:
 
     Each `put` writes one .npz chunk holding its keys and vectors together,
     atomically (temp file, then rename), so a killed write leaves either a
-    whole chunk or none -- never keys without vectors.  Every chunk is read
+    whole chunk or none, never keys without vectors.  Every chunk is read
     at open.  The store is append-only, and deleting the directory is the
     only way to forget.  Safe across threads of one process."""
 
@@ -156,7 +156,8 @@ def _checkpoint(model: Any) -> dict[str, Any]:
 
 def _on_device(model: Any, device: Any, enc: Mapping[str, Any]
                ) -> dict[str, Any]:
-    """A tokenizer encoding moved to `device`, else to the model's."""
+    """A tokenizer encoding moved to `device` if given, else to the
+    model's device."""
     dev = device or next(model.parameters()).device
     return {k: v.to(dev) for k, v in enc.items()}
 
@@ -164,9 +165,10 @@ def _on_device(model: Any, device: Any, enc: Mapping[str, Any]
 def _dtype(model: Any) -> str:
     """The weights' dtype, which changes the vectors (bfloat16 keeps 8
     mantissa bits to float32's 24), so it is part of the identity.  A
-    transformers model has `.dtype`.  A bare torch module reports its first
-    parameter's.  A model with neither is refused rather than given an
-    identity that would let two precisions share cache entries."""
+    transformers model has `.dtype`.  For a bare torch module it is the
+    dtype of its first parameter.  A model with neither is refused rather
+    than given an identity that would let two precisions share cache
+    entries."""
     dt = getattr(model, "dtype", None)
     if dt is None and hasattr(model, "parameters"):
         dt = next(iter(model.parameters())).dtype
@@ -179,7 +181,7 @@ def _dtype(model: Any) -> str:
 class HFEmbedder(Embedder):
     """A transformers model's final hidden states, pooled.
 
-    pooling  "mean"  average over real tokens (attention mask) -- the usual
+    pooling  "mean"  average over real tokens (attention mask), the usual
                      choice for sentence encoders
              "cls"   the first position (BERT-style encoders)
              "last"  the last real token (decoder-only embedding models,

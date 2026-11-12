@@ -11,17 +11,18 @@ the backend
     5. calls `collect(out, enc, reqs)` -- one dict per request
 
 so the hooks see the whole padded batch, and `collect` splits it per row
-using `enc` (which says the padding side, and per row `last` -- the final
-real position -- or `n_prompt`).  That is what makes capture batch-safe:
-nothing assumes row 0, or that the last column is a real token.
+using `enc`, which gives the padding side and, per row, either `last` (the
+final real position) or `n_prompt`.  This makes capture correct at any
+batch size: no probe has to assume that its request is row 0, or that the
+last column is a real token.
 
 Under `HFBackend(prefix_cache=True)` the first forward is fed only the
 uncached tail of the prompt.  `enc` still describes the FULL prompt
 (input_ids and attention_mask cover cached + fed positions), and
-`enc["n_prefix_reused"][k]` says how many leading positions were not fed,
-so full position p is hook index p - n_prefix_reused[k] on the first
-forward, and the read position (the last prompt token) is always the last
-fed index.  `enc["n_prefix_reused"]` is present on every path (zeros
+`enc["n_prefix_reused"][k]` says how many leading positions were not fed.
+On the first forward, full position p is hook index p - n_prefix_reused[k],
+and the read position (the last prompt token) is always the last fed
+index.  `enc["n_prefix_reused"]` is present on every path (zeros
 without reuse), so one probe works either way.  A probe may patch the
 read position and generated tokens, never an earlier fed position: those
 are stored for reuse by later calls.  HFBackend._probing has the full

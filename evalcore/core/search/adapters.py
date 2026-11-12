@@ -1,8 +1,8 @@
 r"""Retrievers in the harness: as an agent's search tool (search_tool, and
 gold_search_tool for the controls), as a corpus with its tool
 (CorpusSearch), and as a backend the runner can call (RetrieverBackend).
-The algorithm modules beside this one import none of the harness; this
-module is where retrieval meets tools and backends.
+The algorithm modules beside this one import nothing from the harness.
+This module is where retrieval meets tools and backends.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ class CorpusSearch:
 
 class RetrieverBackend(Backend):
     """A retriever behind the Backend contract: the query is the last user
-    message, the response text the ranked ids one per line, and meta holds
+    message, the response text is the ranked ids, one per line, and meta holds
     `retrieved` (ids) and `scores`.  Score rows with
     evaluation.retrieval.score_ranked."""
 

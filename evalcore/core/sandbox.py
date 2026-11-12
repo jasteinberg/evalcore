@@ -18,13 +18,14 @@ before it in the same episode.  Two consequences shape this module.
 `DockerSandbox` drives the `docker` command line, so it adds no Python
 dependency.  The isolation is the container's: no network unless asked
 for, memory and CPU limits, a command timeout.  It is not a hardened
-sandbox (gVisor, network policy) for code that may try to escape; use one
-of those for untrusted agents.
+sandbox (gVisor, network policy) for code that may try to escape.  Use
+one of those for untrusted agents.
 
 Failures follow tools.py.  A container that cannot be started or a docker
-daemon that stops answering is the infrastructure's (ToolUnavailable, a
-`tool_error` row).  A command that fails or times out is the model's to
-handle: its exit status and output go back to it as the tool's result.
+daemon that stops answering is an infrastructure failure
+(ToolUnavailable, a `tool_error` row).  A command that fails or times out
+is the model's to handle: its exit status and output go back to it as the
+tool's result.
 """
 
 from __future__ import annotations
@@ -48,8 +49,8 @@ Run = Callable[..., "subprocess.CompletedProcess[str]"]
 class ExecResult:
     """One command's outcome.  `timed_out` is set when the command was
     killed at the sandbox's timeout: killed (status 124, 137) after at
-    least the timeout had elapsed.  An earlier kill with status 137 is the
-    memory limit's, and is reported as the exit status it is."""
+    least the timeout had elapsed.  An earlier kill with status 137 comes
+    from the memory limit and is reported as exit status 137."""
 
     exit_code: int
     stdout: str

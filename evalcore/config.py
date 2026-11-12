@@ -1,4 +1,4 @@
-"""An Experiment from a JSON file -- the route for runs that need no code.
+"""An Experiment from a JSON file: the route for runs that need no code.
 
     {"out": "runs/add_d2.jsonl",
      "task":    {"type": "arithmetic", "digits": 2, "n_items": 512},
@@ -282,9 +282,9 @@ def _dense(embedder: Mapping[str, Any], index: Mapping[str, Any] | None = None,
 
 
 def _require_scored(r: Retriever, where: str) -> ScoredRetriever:
-    """`r` if it can give every document's score (BM25, or dense retrieval
-    over the exact index), refused here otherwise rather than as error rows
-    mid-run."""
+    """`r` if it can score every document (BM25, or dense retrieval over
+    the exact index).  Otherwise it is refused here, when the config is
+    built, rather than producing error rows mid-run."""
     exact = not isinstance(r, DenseRetriever) or (
         isinstance(r.index, ExactIndex) and r.index.exact)
     if not hasattr(r, "score_all") or not exact:
@@ -443,8 +443,9 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
         exp = _build(cfg, base)
     resolved = resolve(cfg, rec)
     if "plugins" in cfg:
-        # a .py plugin is found relative to the config file, and the resolved
-        # config is written beside the sink, elsewhere: absolute paths
+        # a .py plugin is found relative to the config file, but the
+        # resolved config is written beside the sink, which may be in
+        # another directory, so the resolved .py paths are absolute
         resolved["plugins"] = [
             str(((base / n) if base is not None else Path(n)).resolve())
             if n.endswith(".py") else n for n in cfg["plugins"]]

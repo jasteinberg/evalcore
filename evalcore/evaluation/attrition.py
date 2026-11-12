@@ -21,12 +21,11 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     table, because a cell whose failures correlate with item difficulty has
     a biased mean even if the surviving rows are scored perfectly.
 
-    Without `manifest` this tabulates what came back -- `n_rows`, `n_err`,
-    `n_truncated`, `n_unparsed`, `err_rate` -- which is the older and weaker
-    question, because the denominator is the survivors.  A cell that died
-    before its first call contributes no rows and therefore does not appear
-    at all: the table is silent about it, and silence reads as "nothing to
-    report".
+    Without `manifest` this tabulates what came back (`n_rows`, `n_err`,
+    `n_truncated`, `n_unparsed`, `err_rate`).  That is the weaker
+    accounting, because its denominator is the rows that came back.  A cell
+    that died before its first call contributes no rows and so has no line
+    in the table, which a reader takes to mean it had no failures.
 
     With `manifest` (the file `execute` wrote, or the frame `read_manifest`
     returns) every planned unit falls in exactly one of six states, and
@@ -39,20 +38,19 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     `n_unparsed` were answered but carry no metric (see the module
     docstring), so they are attrition from the metric's point of view while
     being distinct from both a failed call and a unit nobody attempted.
-    `n_missing` -- planned, never attempted -- is the category that a kill,
-    an out-of-quota, or a `limit=` left over from a debugging session all
-    land in, and the only one the frame cannot show.
+    `n_missing` (planned, never attempted) is where a killed process, an
+    exhausted quota or a `limit=` left over from a debugging session puts
+    its units, and it is the only state the frame alone cannot show.
 
     Every count except `n_rows` is a count of UNITS, and each planned unit is
     assigned its state once, from the plan side: absent from the frame is
     missing, and otherwise the state is the worst status among its rows,
     ranked error > tool_error > truncated > unparsed > ok.  Counting rows
-    instead
-    breaks the identity on any frame carrying more than one row per unit --
-    a judge panel with three verdicts per response is the case that will
-    arrive -- where it reports err_rate = 2.0 and a negative `n_completed`.
-    `n_rows` is kept as the frame's own row count precisely so that
-    multiplicity stays visible: for the one-row-per-unit frames `to_frame`
+    instead breaks the identity on any frame with more than one row per
+    unit (a judge panel with three verdicts per response, for example),
+    where it reports err_rate = 2.0 and a negative `n_completed`.  `n_rows`
+    is kept as the frame's own row count so that the number of rows per
+    unit stays visible.  For the one-row-per-unit frames `to_frame`
     produces, and only for those,
     `n_rows = n_completed + n_err + n_tool_error + n_truncated + n_unparsed
     + n_unplanned`.
@@ -61,17 +59,16 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     missing, empty, or unreadable degrades to the no-manifest columns.  A
     manifest that is older than the sink (rows in the frame it never
     planned) is reported as `n_unplanned` rather than being treated as
-    negative attrition -- the counts stay non-negative and the discrepancy
-    stays visible.
+    negative attrition, so the counts stay non-negative and the
+    discrepancy stays visible.
 
     Pass the UNFILTERED frame: rows dropped by `to_frame(drop_errors=True)`
     are indistinguishable from units never attempted, and would be counted
     as missing.
 
-    `by` must name columns the manifest also carries, i.e. cell params, tags,
-    or item identity -- never a scored column.  A never-attempted unit has no
-    score by definition, so grouping the plan by one is not a table that can
-    be filled in.
+    `by` must name columns the manifest also carries: cell params, tags or
+    item identity, never a scored column.  A never-attempted unit has no
+    score, so the plan cannot be grouped by a scored column.
     """
     by = list(by)
     st = row_status(df)
@@ -107,7 +104,7 @@ def attrition(df: pd.DataFrame, by: Sequence[str],
     if df.empty or "unit_id" not in df.columns:
         # The limiting case, and the one worth getting right: a sweep that
         # died before its first call has no frame at all.  Every planned
-        # unit is missing, which is a full accounting -- whereas the frame
+        # unit is missing, which is a full accounting, whereas the frame
         # alone cannot even name the columns to group by.
         df = pd.DataFrame(columns=[*by, "unit_id", "_rank"], dtype=object)
 

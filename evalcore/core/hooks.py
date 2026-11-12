@@ -9,7 +9,7 @@
 3. Calls are counted per module, so "each hooked layer ran exactly once per
    forward pass" is an assertion (`check_counts`), not an assumption.
 
-Model-specific capture code -- which tensors to read, which positions --
+Model-specific capture code (which tensors to read, at which positions)
 stays with the caller (typically a Probe handed to HFBackend),
 and torch is never imported here.
 """
@@ -44,9 +44,9 @@ def hooked(model: Any, hooks: Mapping[str, Callable[..., Any]],
     """Register `fn(name, module, *hook_args)` on every module matching each
     pattern in `hooks`, for the duration of the block.
 
-    Forward hooks get (module, args, output) -- or (module, args, kwargs,
-    output) with `with_kwargs` -- and pre-hooks (`pre=True`) get
-    (module, args) or (module, args, kwargs).  `fn` receives the module's
+    Forward hooks get (module, args, output), or (module, args, kwargs,
+    output) with `with_kwargs`.  Pre-hooks (`pre=True`) get (module, args),
+    or (module, args, kwargs).  `fn` receives the module's
     name first.  A non-None return replaces the output (or the inputs, for
     pre-hooks), as torch defines.  Yields the per-module call counter, with
     every hooked module present from the start: a module that never runs
@@ -76,7 +76,7 @@ def hooked(model: Any, hooks: Mapping[str, Callable[..., Any]],
 def check_counts(counts: Counter[str], expected: int,
                  names: list[str] | None = None) -> None:
     """Assert every hooked module (or every name in `names`) ran exactly
-    `expected` times -- e.g. once per forward pass.  A hooked module that
+    `expected` times (e.g. once per forward pass).  A hooked module that
     never ran is in `counts` at 0 (`hooked` puts it there), so it fails
     here by name instead of passing unseen."""
     names = list(counts) if names is None else names

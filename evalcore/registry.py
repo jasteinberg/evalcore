@@ -1,4 +1,4 @@
-"""Named factories, so a JSON config can name any component -- yours too.
+"""Named factories, so a JSON config can name any component, yours included.
 
 Every configurable kind of component has a registry:
 
@@ -9,21 +9,22 @@ A factory is any callable (a function or a class) registered under a name:
 
     from evalcore.registry import register
 
-    @register("backend", "vllm")
-    def vllm(url: str, model: str, timeout: float = 60.0) -> Backend:
-        return MyVLLMBackend(url, model, timeout)
+    @register("backend", "my_server")
+    def my_server(url: str, model: str, timeout: float = 60.0) -> Backend:
+        return MyServerBackend(url, model, timeout)
 
-and a config then says {"backend": {"type": "vllm", "url": ..., "model": ...}}.
+and a config then says
+{"backend": {"type": "my_server", "url": ..., "model": ...}}.
 The factory's signature IS the schema: keys it does not take are refused
-by name, parameters without a default are required, and nothing else needs
-writing.  (A factory taking **kwargs accepts any key and then owns the
-checking.)
+by name, parameters without a default are required, and no separate
+schema needs writing.  (A factory taking **kwargs accepts any key and
+then owns the checking.)
 
-Some factories need more than their spec -- a retriever needs the corpus,
-a retrieval backend the task.  Those are KEYWORD-ONLY parameters (after a
-`*`): they are CONTEXT, supplied by the experiment through `build(spec,
-where, docs=...)`, never settable from a spec, and a factory used where
-its context is not available is refused by name.
+Some factories need more than their spec: a retriever needs the corpus, and a
+retrieval backend needs the task.  Those are KEYWORD-ONLY parameters (after a
+`*`): they are CONTEXT, supplied by the experiment through `build(spec, where,
+docs=...)`, never settable from a spec, and a factory used where its context is
+not available is refused by name.
 
 A plugin module registers its factories on import.  Name it under
 "plugins" in the config (a module name or a .py path) and `from_config`

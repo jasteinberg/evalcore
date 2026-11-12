@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when library code changes and no test changes with it.
 
-A change under `evalcore/` that touches nothing under `tests/` is either a
+A change under `evalcore/` with no change under `tests/` is either a
 refactor that must not change behaviour (the existing tests are its guard)
 or a new behaviour with no test (the case this check exists to stop).  The
 script cannot tell them apart, so it fails and names the override.  It is a

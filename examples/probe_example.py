@@ -9,7 +9,7 @@ position only, where v is the unembedding direction W_U[A] - W_U[B]
 
     m = log p(A) - log p(B)
 
-linearly in alpha -- while alpha is small against the residual's norm
+linearly in alpha, as long as alpha is small against the residual's norm
 |h|.  The final RMSNorm divides by the norm of h + alpha v, so once
 alpha >> |h| the margin saturates at the value v alone would give.  The
 grid spans both regimes.  The same probe captures the residual at the

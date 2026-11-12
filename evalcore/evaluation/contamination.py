@@ -8,17 +8,17 @@ confidence interval, or the sample flags it.
 
 Two measures, both standard:
 
-* n-gram overlap at fixed n -- the fraction of the candidate's n-grams that
+* n-gram overlap at fixed n: the fraction of the candidate's n-grams that
   appear anywhere in the reference.  Cheap, and the usual choice in the
   decontamination literature (n = 8 to 13 for natural language).
-* longest match -- the length of the longest contiguous run shared with the
+* longest match: the length of the longest contiguous run shared with the
   reference.  A maximum rather than a mean, so it is robust to a candidate
   that is mostly original with one memorised passage in it.
 
 Neither number means anything alone.  Two samples of the same author, or two
 documents from the same domain, share long runs by coincidence: function words,
 stock phrases, formatting.  The interpretable quantity is the *difference*
-between the candidate and a control -- reference-adjacent text known not to be
+between the candidate and a control: reference-adjacent text known not to be
 in the reference.  A candidate scoring at or below its control is producing,
 and one scoring well above it is retrieving.  `report()` takes the control as a
 first-class argument for that reason.
@@ -73,8 +73,9 @@ def longest_match(candidate: Sequence[Any], reference: Sequence[Any],
 
     Binary search on the length: presence of a shared run of length L implies
     a shared run of every length below L, so the predicate is monotone.  The
-    cap is real -- a return value equal to `max_n` means "at least max_n", not
-    "exactly max_n", and callers should raise the cap rather than believe it.
+    cap is real.  A return value equal to `max_n` means "at least max_n",
+    not "exactly max_n", and a caller that gets it should raise the cap
+    rather than report `max_n`.
     """
     hi = min(max_n, len(candidate), len(reference))
     if hi <= 0:
@@ -87,7 +88,7 @@ def longest_match(candidate: Sequence[Any], reference: Sequence[Any],
     if not shares(1):
         return 0
     lo = 1
-    while lo < hi:                      # invariant: shares(lo), maybe not hi
+    while lo < hi:      # invariant: a run of lo is shared, of hi maybe not
         mid = (lo + hi + 1) // 2
         if shares(mid):
             lo = mid
@@ -107,9 +108,9 @@ def report(candidates: Mapping[str, Sequence[Any]],
     control row is the overlap you get *without* memorisation, for this
     reference and this genre, and candidates at or below it are producing.
 
-    Omitting `control` is supported and discouraged -- the numbers are then
-    uncalibrated, and the missing row is the reason a reviewer cannot tell
-    whether 0.31 is alarming or ordinary.
+    Omitting `control` is supported but discouraged.  The numbers are then
+    uncalibrated: without the control row a reviewer cannot tell whether
+    0.31 is alarming or ordinary.
 
     "control" is reserved for the control row: a candidate of that name
     would be replaced by it, and its excess taken against itself.

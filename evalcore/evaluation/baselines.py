@@ -5,9 +5,10 @@ number, not a result.  What makes it a result is the distance to what you
 get for free.  This module computes the free numbers.
 
 The failure it guards against is specific and common: a stated baseline that
-is *below* a trivial predictor, so clearing it demonstrates nothing.  It is
-easy to miss because the comparison is never made -- the reference number
-arrives from outside, is treated as the bar, and nobody checks the bar.
+is *below* a trivial predictor, so beating it shows no skill.  It is easy
+to miss because the comparison is never made: the reference number arrives
+from outside, is treated as the bar, and nobody checks the bar against the
+trivial predictors.
 
 Three floors, all computed from the label marginal alone:
 
@@ -23,8 +24,8 @@ Floors are deterministic given the labels: they have no sampling error of
 their own, so the uncertainty in any comparison lives entirely in the observed
 metric and belongs to the bootstrap in `stats`.  For metrics with no label
 structure (perplexity, free-form judge scores), a floor has to come from a
-cheap model rather than from the marginal -- `custom` exists to carry that
-number into the same table so the comparison is made in one place.
+cheap model rather than from the marginal.  `custom` carries that number
+into the same table, so the comparison is made in one place.
 """
 
 from __future__ import annotations
@@ -63,8 +64,8 @@ def prior_matched_rate(labels: Sequence) -> float:
     """Accuracy of sampling a prediction from the label marginal, sum p_i^2.
 
     Also the collision probability of the marginal, and 1 minus the Gini
-    impurity -- the same quantity that appears as an inverse participation
-    ratio elsewhere in this package."""
+    impurity.  It is the same quantity that appears as an inverse
+    participation ratio elsewhere in this package."""
     p, _ = _marginal(labels)
     return float(np.sum(p ** 2))
 
@@ -80,7 +81,7 @@ def floors(labels: Sequence | None = None,
            custom_units: str = "rate") -> pd.DataFrame:
     """The free numbers for this label distribution, strongest first.
 
-    `custom` carries floors that cannot be derived from the marginal -- an
+    `custom` carries floors that cannot be derived from the marginal: an
     n-gram model's loss, a retrieval baseline, a published reference figure.
     Passing a stated reference here is the point: it gets ranked against the
     trivial predictors instead of being assumed to sit above them.

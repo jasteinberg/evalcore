@@ -2,7 +2,7 @@
 
 `calibrate` makes a few real calls and records what a run needs to know:
 latency, tokens per call, how often the budget truncates, the provider's
-rate-limit headers as returned, and -- for a local model -- throughput per
+rate-limit headers as returned, and, for a local model, throughput per
 batch size.  `derive` turns that into run settings (workers, batch size)
 and lists every assumption it made, so a sizing decision is never silent.
 
@@ -141,7 +141,8 @@ def calibration_caveats(cal: Calibration) -> list[str]:
       MIN_OK_CALLS it is one or two draws from a latency distribution that
       is typically right-skewed, and the token counts likewise.
     * Failed calls: what failed in calibration fails in the run.
-    * One batch size (local model): the chosen batch is not a comparison.
+    * One batch size (local model): the batch size was not chosen by
+      comparing throughputs.
     """
     out = []
     if cal.throughput:

@@ -26,8 +26,8 @@ Variant kinds, with the label each gets:
     near_name               the river whose name is closest to gold      0
     other                   another river                                0
 
-Numeric questions (pop, river_pop) get every kind but near_name and other;
-river questions (person_river) get those two instead of twin, transposed
+Numeric questions (pop, river_pop) get every kind but near_name and other.
+River questions (person_river) get those two instead of twin, transposed
 and near.  Negatives use the same sentence templates as positives, so the
 surface form carries no label.  The judge sees the gold value as
 `str(gold)` and numeric answers formatted with thousands separators, as a

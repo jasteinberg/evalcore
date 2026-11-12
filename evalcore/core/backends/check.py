@@ -3,7 +3,7 @@
 The runner relies on a few properties no type signature expresses.  There
 is one response per request, in order, with the request's unit_id.  The
 identity is stable and serialisable.  Failures are raised as Transient or
-Fatal.  A backend that breaks one of them does not crash the harness -- it
+Fatal.  A backend that breaks one of them does not crash the harness.  It
 produces rows that look like results.  This check makes the calls and
 says which property failed.  It calls the backend for real: pass cheap
 requests (the default sends four short prompts)."""

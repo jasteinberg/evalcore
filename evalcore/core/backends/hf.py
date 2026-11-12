@@ -45,8 +45,8 @@ class HFBackend(Backend):
     it key by key.  Exactly one dict per request, or the batch fails with an
     error naming the probe.
 
-    Everything model-specific -- per-head attention shares over item spans,
-    next-token distributions restricted to the in-context value set -- lives
+    Everything model-specific (per-head attention shares over item spans,
+    next-token distributions restricted to the in-context value set) lives
     in the probe, so the core never grows a dependency on torch.
 
     `prefix_cache=True` keeps the key/value caches of up to `prefix_slots`
@@ -62,17 +62,18 @@ class HFBackend(Backend):
     T - 1 positions.  The read position is the last prompt token T - 1,
     and a probe may patch activations there (and at generated tokens).
     Under the causal mask a patch at position t changes the keys and
-    values at t and later only, so positions < T - 1 are the unpatched
-    model's whatever the probe did.  Hence a stored prefix never contains
-    a patched position or a generated token, and every call computes at
-    least its last prompt token fresh: a prompt identical to a stored one
-    reuses T - 1 positions.
+    values at t and later only, so the keys and values at positions
+    < T - 1 are those of the unpatched model, whatever the probe did.
+    Hence a stored prefix never contains a patched position or a generated
+    token, and every call computes at least its last prompt token fresh: a
+    prompt identical to a stored one reuses T - 1 positions.
 
-    Which slot.  The slot with the longest common prefix n (ties: the most
-    recently used), and n = 0 runs a full pass.  The new prompt's cache goes
-    into the slot it extends when it extends one completely (that slot is
-    superseded: any prompt matching it matches the new one at least as
-    far), else into an empty slot, else over the least recently used.
+    Which slot.  A call reuses the slot whose ids share the longest common
+    prefix n with its prompt (on a tie, the most recently used one), and
+    n = 0 means a full pass.  The new prompt's cache goes into the slot it
+    extends when it extends one completely (that slot is superseded: any
+    prompt matching it matches the new one at least as far), else into an
+    empty slot, else over the least recently used.
     When the source slot is kept, its cache is copied before use, because
     a forward appends to a cache in place.  Each row's meta records
     `n_prefix_reused` (0 = full pass) and `prefix_slot` (the slot index
@@ -90,8 +91,9 @@ class HFBackend(Backend):
     different split of the sequence), and which split point n a call gets
     depends on which prompts came before and on K.  That is why the flag
     and K enter `identity()`, and why `n_prefix_reused` in meta records the
-    split of every row.  Refused rather than worked around: batch size > 1,
-    and `target` requests (teacher forcing is not reused)."""
+    split of every row.  Two cases are refused rather than worked around:
+    batch size > 1, and `target` requests (teacher forcing does not reuse
+    prefixes)."""
 
     name = "hf"
     supports_target = True
@@ -137,8 +139,8 @@ class HFBackend(Backend):
         # The checkpoint is named by its path AND the snapshot loaded: a hub
         # id keeps the same name_or_path at every revision (Pythia's step
         # axis), and only config._commit_hash tells them apart.  The probe
-        # by its own identity, since what it captures is cached alongside
-        # the text.
+        # is named by its own identity, since what it captures is cached
+        # alongside the text.
         return {**self._base_identity(),
                 "model": getattr(self.model, "name_or_path", None),
                 "commit": getattr(getattr(self.model, "config", None),
@@ -152,8 +154,8 @@ class HFBackend(Backend):
                 "generate": self.generate,
                 "output_attentions": self.output_attentions,
                 "probe": None if self.probe is None else self.probe.identity(),
-                # only when on (the flag adds no key when off), and K with it,
-                # since K moves the split points
+                # present only when the flag is on, so it adds no key when
+                # off.  K comes with it, since K moves the split points
                 **({"prefix_cache": True, "prefix_slots": self.prefix_slots}
                    if self.prefix_cache else {})}
 
@@ -162,9 +164,9 @@ class HFBackend(Backend):
             return ("HFBackend(prefix_cache=True) does not teacher-force "
                     "targets. Score them with a backend without prefix_cache")
         if self.probe is None:
-            # without a probe nothing here reads a param outside DECODE_KEYS
-            # (complete_batch checks those per path), so any other key -- a
-            # label such as the model's name, a typo -- would move the cell
+            # without a probe, no param outside DECODE_KEYS is read
+            # (complete_batch checks those per path), so any other key (a
+            # label such as the model's name, a typo) would move the cell
             # id while the forward pass stays the same.  A probe receives the
             # requests and may read such a key itself, so it is allowed then.
             unread = unread_params(merge_params(self.default_params,
@@ -180,7 +182,7 @@ class HFBackend(Backend):
 
         Generated text is sliced off as `gen[:, prompt_len:]` and the forward path
         reads the final column, both of which are correct only when padding is on
-        the LEFT -- under right padding they return pad columns and shifted spans
+        the LEFT.  Under right padding they return pad columns and shifted spans
         with no error raised.  Many instruct tokenizers also ship `pad_token=None`
         (Llama, Mistral), which silently changes what the truncation check below
         measures.  Falling back to eos is safe because pad columns are masked out
@@ -197,8 +199,8 @@ class HFBackend(Backend):
 
     def complete(self, req: Request) -> Response:
         """A single request is a batch of one.  `execute` calls this whenever
-        batch_size == 1.  Without it the base class raised
-        NotImplementedError and every unit became an error row."""
+        batch_size == 1.  Without this override the base class would raise
+        NotImplementedError and every unit would become an error row."""
         return self.complete_batch([req])[0]
 
     def _device(self) -> Any:
@@ -260,7 +262,8 @@ class HFBackend(Backend):
         (generated tokens): `_reusing` stores positions < T - 1, which a
         patch at T - 1 cannot reach under the causal mask.  A probe that
         writes to an earlier fed position would leave it in a stored prefix
-        and reach later calls.  That is not detectable here, so do not."""
+        and reach later calls.  This backend cannot detect such a write, so
+        a probe must not make one."""
         holder = SimpleNamespace(out=None, extras=[{} for _ in reqs])
         if self.probe is None:
             yield holder
@@ -300,7 +303,7 @@ class HFBackend(Backend):
         itself.  The call fills the cache in place, so afterwards it is
         cropped to T - 1 (dropping the read position, which a probe may
         have patched, and any generated tokens) and stored.  The class
-        docstring says which slot it goes to.  If the call raises nothing
+        docstring says which slot it goes to.  If the call raises, nothing
         is stored, and a slot consumed by the call stays empty: a
         half-written cache is never reused."""
         if not self.prefix_cache:
@@ -406,7 +409,7 @@ class HFBackend(Backend):
     def complete_batch(self, reqs: Sequence[Request]) -> list[Response]:
         """A batch shares one generate() call, so it must share one set of
         decode params.  Mixed batches are split and run as separate groups
-        rather than silently taking the first request's settings -- otherwise
+        rather than silently taking the first request's settings.  Otherwise
         a grid that varies temperature or max_tokens contaminates every cell
         whose requests happen to land behind another cell's in a batch.
 
@@ -430,10 +433,10 @@ class HFBackend(Backend):
         if kinds[0] == "choice":
             return self._choice_batch(reqs)
         def prepare(r: Request) -> str | None:
-            """The request's decode signature, its batch group.  A plain
-            forward reads logits once and samples nothing, so there any
-            decode param would move the cell id and the cache key while
-            changing nothing computed."""
+            """The request's decode signature, which is its batch group.  A
+            plain forward reads the logits once and does not sample, so on
+            that path a decode param would move the cell id and the cache
+            key without changing what is computed."""
             if not self.generate:
                 refuse_dropped(r.params, frozenset(),
                                "HFBackend forward (generate=False)")
@@ -459,8 +462,8 @@ class HFBackend(Backend):
         prompt's own ids.  Otherwise a merge straddles the join ("wor" +
         "ld" -> "world") and no token sequence scores the target alone, so
         the request is refused rather than silently scoring a merged token
-        or a shifted span.  The usual convention -- prompt ending in "=",
-        target starting with a space -- always passes, because byte-level
+        or a shifted span.  The usual convention (prompt ending in "=",
+        target starting with a space) always passes, because byte-level
         BPE merges never cross a space-led boundary of this kind, and the check
         is what makes that a guarantee instead of an assumption."""
         prompt = self._render(req)
@@ -525,11 +528,11 @@ class HFBackend(Backend):
         and only each row's last position is materialised (`logits_to_keep`
         with the row positions), so a 1k-token prompt over a 150k vocabulary
         does not allocate full logits.  Whether the forward takes
-        `logits_to_keep` is read from its signature, a named parameter and
-        nothing less: a forward that swallows it in **kwargs would return
-        full logits, read here at the wrong columns.  Without it, full
-        logits.  Either way the logits' length is checked against what was
-        asked for."""
+        `logits_to_keep` is read from its signature, and only a named
+        parameter counts: a forward that accepts it through **kwargs and
+        ignores it would return full logits, read here at the wrong columns.
+        A forward without the parameter returns full logits.  Either way
+        the logits' length is checked against what was asked for."""
         import torch
 
         def prepare(r: Request) -> tuple[list[int], list[int]]:
@@ -704,7 +707,7 @@ class HFBackend(Backend):
                 # repetition_penalty is passed explicitly because checkpoints ship
                 # their own (Qwen2.5-Instruct: 1.1) in generation_config.  Left to
                 # the checkpoint, do_sample=False returns the argmax of PENALIZED
-                # logits -- a greedy decode that disagrees with the model's own
+                # logits: a greedy decode that disagrees with the model's own
                 # logits and with any other harness scoring the same items.
                 # generate() is a transformers method, unknown to torch's types
                 gen = cast(Any, self.model).generate(
@@ -718,9 +721,9 @@ class HFBackend(Backend):
                 # Cut, not finished: the row used the whole budget without
                 # emitting a stop token.  generate() fills a finished row
                 # with pad after its eos, so a row holding any eos or pad id
-                # stopped on its own -- including one whose eos landed in
-                # the last budget slot, which counting non-pad tokens would
-                # call cut whenever pad != eos.
+                # stopped on its own.  That includes a row whose eos landed
+                # in the last budget slot, which a count of non-pad tokens
+                # would call cut whenever pad != eos.
                 stop = self._eos_ids() | (
                     {int(self.tok.pad_token_id)}
                     if self.tok.pad_token_id is not None else set())
@@ -742,8 +745,9 @@ class HFBackend(Backend):
 
 
 def _crop(cache: Any, n: int) -> None:
-    """Cut `cache` to its first n positions.  The call is spelled the way
-    every supported transformers reads alike: a negative count of positions
+    """Cut `cache` to its first n positions.  The call is written so that
+    every supported transformers version reads it the same way: a negative
+    count of positions
     to drop (5.x refuses a positive length, and 4.x reads crop(0) as "keep
     nothing"), and no call when there is nothing to drop."""
     drop = cache.get_seq_length() - n

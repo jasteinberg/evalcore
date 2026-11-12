@@ -12,11 +12,12 @@ class Cache:
     """Content-addressed on-disk cache, one JSON file per key under a
     two-character shard directory.  The runner keys it on `request_key`:
     the request as actually made (messages, params, backend identity and
-    defaults, repeat index), so the same call is never paid for twice across
-    runs, dry runs, or crashes -- which is what makes a long unattended sweep
-    survivable -- and a different call is never served this one's answer.
-    It holds responses only, never scores, so a metric change is a re-score.
-    Delete the directory to force a refresh.  Never mutate it."""
+    defaults, repeat index).  So the same call is never paid for twice
+    across runs, dry runs or crashes, which is what lets a long unattended
+    sweep survive a crash, and a different call is never served this one's
+    answer.  It holds responses only, never scores, so a metric change is a
+    re-score.  Delete the directory to force a refresh.  Never edit its
+    files."""
 
     def __init__(self, root: str | Path, enabled: bool = True) -> None:
         self.root = Path(root)

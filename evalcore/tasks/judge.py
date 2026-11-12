@@ -60,7 +60,8 @@ WITH_REFERENCE = " The reference answer is correct."
 @dataclass(frozen=True)
 class Criterion:
     """One rubric line.  `question` is put to the judge so that yes means
-    pass; `name` is its key in the verdict and the column `v_<name>`."""
+    pass.  `name` is the criterion's key in the verdict, and its column in
+    the rows is `v_<name>`."""
 
     name: str
     question: str
@@ -181,8 +182,9 @@ def run_panel(task: Task, judges: Sequence[tuple[str, Backend, Mapping[str, Any]
               out_dir: str | Path, **kw: Any) -> pd.DataFrame:
     """Run `task` once per judge (name, backend, params), each with its own
     backend instance, to out_dir/<name>.jsonl, and stack the frames.  The
-    judge's name is a cell tag, so it labels rows without entering any
-    key.  Keyword arguments pass to Task.run (cache, workers, ...)."""
+    judge's name is a cell tag, so it labels rows without entering the
+    request key or the cell id.  Keyword arguments pass to Task.run
+    (cache, workers, ...)."""
     names = [j[0] for j in judges]
     if len(set(names)) != len(names):
         raise ValueError(f"judge names must be distinct: {names}")
@@ -207,8 +209,8 @@ def verdicts_long(judged: pd.DataFrame, criteria: Sequence[Criterion],
     judge, criterion) from the judge rows with status ok.  `reference`
     maps a criterion to a metric column of the `source` frame (an exact
     grader's `correct`), joined on the source's `id_col` (as passed to
-    judge_items); a source row without
-    that metric (unparsed, not scored) gives a missing reference."""
+    judge_items).  A source row without
+    that metric (unparsed, so not scored) gives a missing reference."""
     ok = judged[judged["status"] == "ok"]
     rows = []
     for c in criteria:
