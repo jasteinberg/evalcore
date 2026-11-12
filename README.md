@@ -226,7 +226,7 @@ locally.
 |---|---|
 | `spec.py` | `Cell`, `Item`, `Unit`, `grid`, `digest`: content-addressed identity |
 | `backends/base.py` | `Request`, `Response`, the `Backend` contract, `request_key`, retries |
-| `backends/http.py` | `HTTPBackend`: Anthropic, OpenAI and Gemini, including tool calls and a forced `tool_choice` |
+| `backends/http.py` | `HTTPBackend`: Anthropic, OpenAI and Gemini, including tool calls and a forced `tool_choice`. `VLLMBackend`: a vLLM server, keyed on the weights it serves (`GET /v1/models`) and a declared revision rather than its URL |
 | `backends/hf.py` | `HFBackend`: local generation, teacher-forced scoring, candidate scoring, opt-in prefix KV-cache reuse |
 | `backends/probe.py` | `Probe`, `FunctionProbe`: capture from inside each forward pass |
 | `backends/cache.py` | `Cache`: one JSON file per request key |
@@ -238,6 +238,7 @@ locally.
 | `events.py` | the run's event log, `summarize_events`, `parse_log` for foreign logs |
 | `calibrate.py` | `calibrate`, `derive` |
 | `agent.py`, `tools.py` | `AgentBackend` (the multi-turn tool loop), `Tool` |
+| `sandbox.py` | `DockerSandbox`, `shell_tool`: a fresh container per episode (no network by default, memory, CPU and time limits), removed however the episode ends. Sandbox tool results are never cached |
 | `hooks.py` | `hooked`: forward hooks that must match, are counted, and are always removed |
 | `embed.py` | `Embedder` (function, HF, OpenAI, Gemini) and the per-text vector cache |
 | `search/` | `BM25`, `ExactIndex`, `FaissIndex`, `DenseRetriever`, `Reranker`, `SampledRetriever`, `GoldControl`, `CorpusSearch`, `RetrieverBackend` |

@@ -21,6 +21,10 @@ things in a results table:
     anything else     a bug in the tool's code.  An error row, never hidden
                       as model misbehaviour.
 
+Sandbox tools.  A tool with `uses_sandbox=True` (a shell, see sandbox.py)
+is called as fn(arguments, session), with the episode's container session.
+It is stateful, so its results are never cached on its arguments.
+
 Context tools.  Most tools are a function of their arguments alone.  A tool
 whose output also depends on WHICH unit it serves sets `uses_context=True`
 and is called as fn(arguments, ctx), with ctx a ToolContext (unit_id,
@@ -66,8 +70,9 @@ class ToolContext:
 
 @dataclass(frozen=True)
 class Tool:
-    """`fn(arguments) -> str`, or `fn(arguments, ctx) -> str` with
-    `uses_context=True`.  `version` belongs in the identity: bump it when
+    """`fn(arguments) -> str`, `fn(arguments, ctx) -> str` with
+    `uses_context=True`, or `fn(arguments, session) -> str` with
+    `uses_sandbox=True`.  `version` belongs in the identity: bump it when
     the tool's behaviour changes, so cached results and finished rows made
     with the old one are not reused."""
 
@@ -77,6 +82,12 @@ class Tool:
     fn: Callable[..., str] = field(compare=False)
     version: str = "1"
     uses_context: bool = False
+    uses_sandbox: bool = False
+
+    def __post_init__(self) -> None:
+        if self.uses_context and self.uses_sandbox:
+            raise ValueError(f"tool {self.name!r}: a sandbox tool already "
+                             f"runs in its unit's own container")
 
     def spec(self) -> dict[str, Any]:
         return {"name": self.name, "description": self.description,
@@ -86,10 +97,12 @@ class Tool:
         ident = {**self.spec(), "version": self.version}
         if self.uses_context:            # absent, so existing identities hold
             ident["uses_context"] = True
+        if self.uses_sandbox:
+            ident["uses_sandbox"] = True
         return ident
 
     def __call__(self, arguments: Mapping[str, Any],
-                 ctx: ToolContext | None = None) -> str:
+                 ctx: ToolContext | None = None, session: Any = None) -> str:
         if not isinstance(arguments, Mapping):
             raise ToolInputError(f"{self.name}: arguments must be an object")
         props = self.parameters.get("properties", {})
@@ -101,6 +114,11 @@ class Tool:
             problems = ([f"missing {missing}"] if missing else []) + (
                 [f"unknown argument(s) {unknown}"] if unknown else [])
             raise ToolInputError(f"{self.name}: " + "; ".join(problems))
+        if self.uses_sandbox:
+            if session is None:
+                raise TypeError(f"tool {self.name!r} runs in a sandbox and "
+                                f"was called without a session")
+            return self.fn(arguments, session)
         if self.uses_context:
             if ctx is None:
                 raise TypeError(f"tool {self.name!r} reads the unit it serves "

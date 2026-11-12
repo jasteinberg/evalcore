@@ -85,6 +85,7 @@ from .core.records import (
     write_manifest,
 )
 from .core.runner import ParseFailure, Runner, execute, plan
+from .core.sandbox import DockerSandbox, shell_tool
 from .core.search import (
     BM25,
     CorpusSearch,
@@ -152,7 +153,8 @@ __all__ = [  # noqa: RUF022 - grouped by layer, for readers
     # backends
     "Backend", "Request", "Response", "Transient", "Fatal", "DECODE_KEYS",
     "HTTPBackend", "VLLMBackend", "HFBackend", "EchoBackend", "FunctionBackend",
-    "AgentBackend", "Probe", "FunctionProbe", "Cache", "check_backend",
+    "AgentBackend", "DockerSandbox", "shell_tool", "Probe", "FunctionProbe",
+    "Cache", "check_backend",
     "CheckReport", "with_retries",
     # tools
     "Tool", "ToolContext", "ToolInputError", "ToolUnavailable",

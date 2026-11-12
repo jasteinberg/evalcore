@@ -28,6 +28,12 @@ Tool results can be cached content-addressed on (tool identity,
 arguments).  With live tools -- a web search whose results drift -- that
 cache is what makes a rerun see the same results, so pass one.
 
+A sandbox (sandbox.py) gives each episode its own container: started
+before the first turn, removed when the episode ends, however it ends.
+Sandbox tools (Tool.uses_sandbox) run in it, and their results are never
+cached, since a stateful command's output depends on the episode so far.
+A container that fails to start is a `tool_error` row.
+
 A context tool (Tool.uses_context, see tools.py) is also given the unit it
 serves, and its cached results are keyed on (item_id, repeat) as well.  An
 agent holding one also puts the item into its request key (key_context), so
@@ -37,11 +43,13 @@ context tools, keys are exactly as before.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import Any
 
 from .backends.base import Backend, Request, Response, with_retries
 from .backends.cache import Cache
+from .sandbox import Sandbox, SandboxSession
 from .spec import digest
 from .tools import Tool, ToolContext, ToolInputError, ToolUnavailable, tool_index
 
@@ -54,7 +62,8 @@ class AgentBackend(Backend):
     def __init__(self, inner: Backend, tools: Sequence[Tool],
                  max_turns: int = 8, max_tool_calls: int = 16,
                  tool_cache: Cache | None = None, attempts: int = 5,
-                 result_chars: int = 20_000) -> None:
+                 result_chars: int = 20_000,
+                 sandbox: Sandbox | None = None) -> None:
         if not inner.supports_tools:
             raise TypeError(f"{type(inner).__name__} cannot send tools "
                             f"(supports_tools is False)")
@@ -63,6 +72,12 @@ class AgentBackend(Backend):
         self.tool_cache, self.attempts = tool_cache, attempts
         self.result_chars = result_chars
         self.uses_context = any(t.uses_context for t in self.tools.values())
+        boxed = [t.name for t in self.tools.values() if t.uses_sandbox]
+        if boxed and sandbox is None:
+            raise TypeError(f"tools {boxed} run in a sandbox: pass sandbox=")
+        if sandbox is not None and not boxed:
+            raise TypeError("a sandbox was given, but no tool runs in it")
+        self.sandbox = sandbox
 
     def key_context(self, req: Request) -> dict[str, Any] | None:
         return {"item_id": req.item_id} if self.uses_context else None
@@ -74,23 +89,31 @@ class AgentBackend(Backend):
         return super().refusal(req)
 
     def _context(self, req: Request) -> ToolContext | None:
-        if not self.uses_context:
+        if not self.uses_context and self.sandbox is None:
             return None
         if req.item_id is None:
-            raise ValueError(f"context tools need Request.item_id, and unit "
-                             f"{req.unit_id} has none")
+            if self.uses_context:
+                raise ValueError(f"context tools need Request.item_id, and "
+                                 f"unit {req.unit_id} has none")
+            return ToolContext(req.unit_id, "", req.repeat)
         return ToolContext(req.unit_id, req.item_id, req.repeat)
 
     def identity(self) -> dict[str, Any]:
         return {"backend": self.name, "inner": self.inner.identity(),
                 "tools": [t.identity() for t in self.tools.values()],
                 "max_turns": self.max_turns,
-                "max_tool_calls": self.max_tool_calls}
+                "max_tool_calls": self.max_tool_calls,
+                # absent without one, so existing identities hold
+                **({"sandbox": self.sandbox.identity()}
+                   if self.sandbox is not None else {})}
 
     def close(self) -> None:
         self.inner.close()
 
-    def _call_tool(self, tool: Tool, args: Any, ctx: ToolContext | None) -> str:
+    def _call_tool(self, tool: Tool, args: Any, ctx: ToolContext | None,
+                   session: SandboxSession | None = None) -> str:
+        if tool.uses_sandbox:             # stateful: never cached
+            return tool(args, session=session)
         key_obj: dict[str, Any] = {"tool": tool.identity(), "args": args}
         if tool.uses_context:
             if ctx is None:
@@ -107,8 +130,34 @@ class AgentBackend(Backend):
         return content
 
     def complete(self, req: Request) -> Response:
-        specs = [t.spec() for t in self.tools.values()]
         ctx = self._context(req)
+        if self.sandbox is None:
+            return self._episode(req, ctx, None)
+        assert ctx is not None
+        try:
+            session = self.sandbox.start(ctx)
+        except ToolUnavailable as exc:
+            return Response(req.unit_id, error=f"sandbox unavailable: {exc}",
+                            meta={"backend": self.name, "tool_error": True,
+                                  "truncated": False})
+        try:
+            r = self._episode(req, ctx, session)
+        except BaseException:
+            session.close()
+            raise
+        try:
+            session.close()
+        except ToolUnavailable as exc:
+            # the episode's answer stands, and the leaked container is
+            # said on the row and as a warning, not swallowed
+            warnings.warn(f"unit {req.unit_id}: {exc}", RuntimeWarning,
+                          stacklevel=2)
+            r.meta = {**(r.meta or {}), "sandbox_close_error": str(exc)}
+        return r
+
+    def _episode(self, req: Request, ctx: ToolContext | None,
+                 session: SandboxSession | None) -> Response:
+        specs = [t.spec() for t in self.tools.values()]
         msgs = [dict(m) for m in req.messages]
         trajectory: list[dict[str, Any]] = []
         n_calls = input_errors = 0
@@ -168,7 +217,8 @@ class AgentBackend(Backend):
                         raise ToolInputError(
                             f"unknown tool {c.get('name')!r}; available: "
                             f"{sorted(self.tools)}")
-                    content = self._call_tool(tool, c.get("arguments"), ctx)
+                    content = self._call_tool(tool, c.get("arguments"), ctx,
+                                              session)
                     kind = "ok"
                 except ToolInputError as exc:
                     input_errors += 1
