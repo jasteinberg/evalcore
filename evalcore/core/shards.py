@@ -1,8 +1,9 @@
-"""Split one sweep across independent processes (a SLURM array, several
-machines) and merge the results.
+"""Split one sweep across independent processes (a SLURM array, a
+Kubernetes Indexed Job, several machines) and merge the results.
 
     #SBATCH --array=0-15
     i, n = shard_from_env()                  # 3, 16 inside array task 3
+    i, n = shard_from_k8s(16)                # 3, 16 in the pod of index 3
     task.run(cells, backend, shard_path(out, i, n), shard=(i, n), cache=cache)
 
     # afterwards, anywhere
@@ -90,6 +91,26 @@ def shard_from_env(env: Mapping[str, str] | None = None) -> tuple[int, int]:
             f"are not 0..n-1. Use a contiguous --array range")
     i = int(env["SLURM_ARRAY_TASK_ID"]) - int(env["SLURM_ARRAY_TASK_MIN"])
     return check_shard((i, int(env["SLURM_ARRAY_TASK_COUNT"])))
+
+
+def shard_from_k8s(n: int, env: Mapping[str, str] | None = None
+                   ) -> tuple[int, int]:
+    """`(i, n)` for the current pod of a Kubernetes Indexed Job
+    (`completionMode: Indexed`), whose index Kubernetes sets in
+    $JOB_COMPLETION_INDEX.  The job's `completions` is not exposed to the
+    pod, so `n` is passed, and must equal it: an index of n or more is
+    refused, and with fewer completions than n the shards no pod ran are
+    counted missing by `merge_shards`.  A pod the job retries
+    (`backoffLimitPerIndex`) gets the same index and resumes its shard."""
+    env = os.environ if env is None else env
+    raw = env.get("JOB_COMPLETION_INDEX")
+    if raw is None:
+        raise RuntimeError("not inside a Kubernetes Indexed Job "
+                           "(JOB_COMPLETION_INDEX unset). Pass shard=(i, n) "
+                           "explicitly instead")
+    if not raw.isdigit():
+        raise RuntimeError(f"JOB_COMPLETION_INDEX={raw!r} is not an index")
+    return check_shard((int(raw), n))
 
 
 def merge_shards(out: str | Path, n: int) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -307,9 +307,9 @@ name, and parameters without a default are required.
 # my_plugin.py
 from evalcore import register
 
-@register("backend", "vllm")
-def vllm(url: str, model: str, timeout: float = 60.0):
-    return MyVLLMBackend(url, model, timeout)
+@register("backend", "my_server")
+def my_server(url: str, model: str, timeout: float = 60.0):
+    return MyServerBackend(url, model, timeout)
 
 @register("analysis", "worst_items")
 def worst_items(metric: str, n: int = 20):
@@ -318,7 +318,7 @@ def worst_items(metric: str, n: int = 20):
 
 ```json
 {"plugins": ["my_plugin.py"],
- "backend": {"type": "vllm", "url": "http://localhost:8000", "model": "m"},
+ "backend": {"type": "my_server", "url": "http://localhost:8000", "model": "m"},
  "analyses": {"worst": {"type": "worst_items", "metric": "correct"}},
  "...": "..."}
 ```
@@ -564,6 +564,13 @@ python -m evalcore run config.json --shard slurm     # or --shard 3/16
 ```bash
 python -m evalcore merge config.json --shards 16      # once the array is done
 ```
+
+A Kubernetes Indexed Job (`completionMode: Indexed`, `completions: 16`)
+does the same with `--shard k8s/16`. The pod's index comes from
+`$JOB_COMPLETION_INDEX`, and the 16 must equal `completions`, which
+Kubernetes does not expose to the pod. Every launcher needs a file system
+that all shards and the merge can read: the sinks are appended to and the
+cache writes by rename, neither of which object storage (S3, GCS) supports.
 
 A unit belongs to shard `sha256(unit_id) mod n`, so every process computes
 the same partition on its own, and a resumed shard picks up exactly its own

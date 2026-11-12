@@ -12,7 +12,7 @@ import sys
 
 from .config import _plugins, from_config
 from .core.events import format_summary, summarize_events
-from .core.shards import check_shard, shard_from_env
+from .core.shards import check_shard, shard_from_env, shard_from_k8s
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,8 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--yes", action="store_true",
                    help="proceed even above options.max_cost")
     r.add_argument("--recalibrate", action="store_true")
-    r.add_argument("--shard", metavar="I/N|slurm",
-                   help="run only shard I of N (\"slurm\": this array task's)")
+    r.add_argument("--shard", metavar="I/N|slurm|k8s/N",
+                   help="run only shard I of N (\"slurm\": this array task's, "
+                        "\"k8s/N\": this Indexed Job pod's, of N)")
     m = sub.add_parser("merge", help="combine a sharded run, then analyse it")
     m.add_argument("config")
     m.add_argument("--shards", type=int, required=True, metavar="N")
@@ -86,12 +87,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _shard_arg(text: str) -> tuple[int, int]:
-    """"3/16" -> (3, 16), "slurm" -> this array task's shard."""
+    """"3/16" -> (3, 16), "slurm" -> this array task's shard, "k8s/16" ->
+    this Indexed Job pod's shard of 16."""
     if text == "slurm":
         return shard_from_env()
     i, sep, n = text.partition("/")
-    if not sep or not i.isdigit() or not n.isdigit():
-        raise SystemExit(f"--shard: expected I/N or slurm, got {text!r}")
+    if not sep or not n.isdigit() or not (i.isdigit() or i == "k8s"):
+        raise SystemExit(f"--shard: expected I/N, slurm or k8s/N, got "
+                         f"{text!r}")
+    if i == "k8s":
+        return shard_from_k8s(int(n))
     return check_shard((int(i), int(n)))
 
 

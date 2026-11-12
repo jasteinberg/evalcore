@@ -107,7 +107,14 @@ def test_shard_slurm_reads_the_array_task(tmp_path, monkeypatch):
     assert out.with_name("r.shard1-of-3.jsonl").exists()
 
 
-@pytest.mark.parametrize("bad", ["3", "a/3", "3/3", "1/0"])
+def test_shard_k8s_reads_the_pod_index(tmp_path, monkeypatch):
+    cfg, out = config(tmp_path, "s")
+    monkeypatch.setenv("JOB_COMPLETION_INDEX", "2")
+    assert main(["run", str(cfg), "--shard", "k8s/3"]) == 0
+    assert out.with_name("r.shard2-of-3.jsonl").exists()
+
+
+@pytest.mark.parametrize("bad", ["3", "a/3", "3/3", "1/0", "k8s", "k8s/x"])
 def test_a_malformed_shard_argument_is_refused(tmp_path, bad):
     cfg, _ = config(tmp_path, "s")
     with pytest.raises((SystemExit, ValueError)):

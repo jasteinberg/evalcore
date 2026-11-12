@@ -16,6 +16,7 @@ from evalcore import (
     grid,
     merge_shards,
     shard_from_env,
+    shard_from_k8s,
     shard_path,
     units,
 )
@@ -129,6 +130,16 @@ def test_shard_from_a_slurm_array_counts_from_zero():
     env = {"SLURM_ARRAY_TASK_ID": "5", "SLURM_ARRAY_TASK_MIN": "1",
            "SLURM_ARRAY_TASK_COUNT": "16", "SLURM_ARRAY_TASK_STEP": "1"}
     assert shard_from_env(env) == (4, 16)
+
+
+def test_shard_from_a_kubernetes_indexed_job():
+    assert shard_from_k8s(16, {"JOB_COMPLETION_INDEX": "3"}) == (3, 16)
+    with pytest.raises(RuntimeError, match="not inside a Kubernetes"):
+        shard_from_k8s(16, {})
+    with pytest.raises(ValueError, match="shard must be"):
+        shard_from_k8s(16, {"JOB_COMPLETION_INDEX": "16"})   # n < completions
+    with pytest.raises(RuntimeError, match="not an index"):
+        shard_from_k8s(16, {"JOB_COMPLETION_INDEX": "-1"})
 
 
 def test_shard_from_env_refuses_outside_an_array_and_strided_arrays():
