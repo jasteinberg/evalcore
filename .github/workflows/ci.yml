@@ -25,7 +25,7 @@ jobs:
       - run: mypy evalcore
       - run: pytest -q -W error::RuntimeWarning
 
-  # Everything, including local models (CPU torch) and FAISS, on the
+  # Everything, including local models (CPU torch), FAISS and Ray, on the
   # oldest transformers the hf extra allows and on the newest release.
   full:
     runs-on: ubuntu-latest
@@ -39,6 +39,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -e ".[http,hf,retrieval,dev]" "transformers${{ matrix.transformers }}"
-      - run: python -c "import transformers; print('transformers', transformers.__version__)"
+      - run: python -m pip install -e ".[http,hf,retrieval,ray,dev]" "transformers${{ matrix.transformers }}"
+      - run: python -c "import transformers, ray; print('transformers', transformers.__version__, 'ray', ray.__version__)"
       - run: pytest -q -W error::RuntimeWarning
