@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from support.scripted import Counting
@@ -416,3 +417,32 @@ def test_the_search_section_builds_gold_controls(tmp_path, monkeypatch):
     assert oracle.tools["search"].spec() == plain.tools["search"].spec()
     with pytest.raises(ConfigError, match=r"search\.control: mode must be"):
         from_config({**base, "search": {**search, "control": "both"}})
+
+
+def test_a_file_tasks_paths_are_relative_to_the_config_file(tmp_path,
+                                                           monkeypatch):
+    """The task file and corpus a config reads are found beside the config,
+    whatever the working directory; `out` stays relative to the working
+    directory.  The resolved config, written beside the sink, holds the
+    absolute paths, and rebuilds the same job (same job hash)."""
+    data = tmp_path / "configs"
+    data.mkdir()
+    c = cfg(data, out="runs/r.jsonl",
+            task={"type": "file", "path": "tasks.jsonl",
+                  "corpus": "docs.jsonl"})
+    tasks_file(data, n=3)           # after cfg, which writes 4 items there
+    (data / "docs.jsonl").write_text(json.dumps({"id": "d0", "text": "x"}))
+    (data / "c.json").write_text(json.dumps(c))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    res = from_config(Path("..") / "configs" / "c.json").run()
+    assert len(res.frame) == 3
+    assert (elsewhere / "runs" / "r.jsonl").exists()
+    resolved = json.loads((elsewhere / "runs" / "r.jsonl.config.json")
+                          .read_text())
+    assert resolved["task"]["path"] == str((data / "tasks.jsonl").resolve())
+    assert resolved["task"]["corpus"] == str((data / "docs.jsonl").resolve())
+    again = from_config(resolved)       # the same job: done, so skipped
+    assert again.job_hash() == res.job_hash
+    assert again.run().skipped is not None

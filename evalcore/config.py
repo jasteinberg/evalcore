@@ -21,6 +21,9 @@ against its signature.  `python -m evalcore list` prints every registered
 name with its keys.  The built-ins:
 
   task      file (path, name, mapping, corpus), arithmetic, log_qa, search_qa
+            (a file task's path and corpus, like a .py plugin, are
+            relative to the config file; out and cache_dir are relative
+            to the working directory)
   backend   http (flavour, default_params, base_url, timeout), vllm
             (base_url, revision, default_params, timeout), hf (model,
             revision, dtype, device, generate, default_params), echo,
@@ -421,6 +424,26 @@ def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
     return out
 
 
+def _inputs_beside(cfg: dict[str, Any], base: Path) -> None:
+    """Make a file task's relative `path` and `corpus` absolute, resolved
+    against `base` (the config file's directory), in place.  Files a config
+    reads are found beside it, like its .py plugins, so the config and its
+    data move together.  Files a run writes (`out`, `cache_dir`) stay
+    relative to the working directory.  The resolved config is written
+    beside the sink, which may be in another directory, so it records the
+    absolute paths."""
+    if "task" not in cfg:
+        return                      # _build reports the missing key
+    task = cfg["task"]
+    if not (isinstance(task, dict) and "type" in task
+            and task["type"] == "file"):
+        return
+    for key in ("path", "corpus"):
+        if (key in task and isinstance(task[key], str)
+                and not Path(task[key]).is_absolute()):
+            task[key] = str((base / task[key]).resolve())
+
+
 def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
     """An Experiment from a config file or dict (see the module docstring).
 
@@ -439,6 +462,8 @@ def from_config(source: str | Path | Mapping[str, Any]) -> Experiment:
             base, cfg = None, json.loads(json.dumps(dict(source)))
         except TypeError as exc:
             raise ConfigError(f"config: not JSON ({exc})") from exc
+    if base is not None:
+        _inputs_beside(cfg, base)
     with recording() as rec:
         exp = _build(cfg, base)
     resolved = resolve(cfg, rec)
