@@ -74,7 +74,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from . import analyses as an
 from .core.agent import AgentBackend
@@ -410,7 +410,17 @@ def _plugins(names: Sequence[str], base: Path | None) -> None:
             importlib.import_module(name)
 
 
-def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
+class _StageArgs(TypedDict, total=False):
+    """The Experiment keyword arguments a config's "stages" can set, typed,
+    so that `**_stages(...)` cannot be read as filling any other field."""
+    calibrate: Stage | None
+    dry_run: Stage | None
+    execute: Stage | None
+    analyse: Stage | None
+    report: Stage | None
+
+
+def _stages(spec: Mapping[str, Any]) -> _StageArgs:
     _check(spec, set(Experiment.STAGES), "stages")
     out: dict[str, Stage | None] = {}
     for name, s in spec.items():
@@ -421,7 +431,9 @@ def _stages(spec: Mapping[str, Any]) -> dict[str, Stage | None]:
                               f"false (off) or a registered stage")
         else:
             out[name] = build("stage", s, f"stages.{name}")
-    return out
+    # every key is one of Experiment.STAGES (checked above), the
+    # _StageArgs keys
+    return cast(_StageArgs, out)
 
 
 def _inputs_beside(cfg: dict[str, Any], base: Path) -> None:

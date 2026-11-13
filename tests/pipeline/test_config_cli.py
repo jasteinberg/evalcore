@@ -446,3 +446,10 @@ def test_a_file_tasks_paths_are_relative_to_the_config_file(tmp_path,
     again = from_config(resolved)       # the same job: done, so skipped
     assert again.job_hash() == res.job_hash
     assert again.run().skipped is not None
+
+
+def test_the_typed_stage_arguments_are_the_experiments_stages():
+    """config._StageArgs types `**_stages(...)`; its keys must be exactly
+    Experiment.STAGES, or a stage would be untyped or a typo accepted."""
+    from evalcore.pipeline import Experiment
+    assert set(config_mod._StageArgs.__annotations__) == set(Experiment.STAGES)

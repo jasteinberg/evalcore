@@ -327,7 +327,14 @@ class Experiment:
 
     So `exp.execute` is the stage, not `core.runner.execute`: the stage
     is what calls it, with the options and the calibrated settings.  Pass
-    a function to replace a stage, or None to skip it."""
+    a function to replace a stage, or None to skip it.
+
+    The units are cells x items x range(repeats) by default.
+    `Experiment.from_units` takes them as a given list instead, for a plan
+    that is not a product (each call its own repeat index, one item
+    sampled k times and another read once).  Every stage plans
+    `units()`, so the manifest, dry run, calibration, job hash and
+    `sharded(i, n)` all cover exactly that list."""
 
     task: Task
     backend: Backend
@@ -342,6 +349,8 @@ class Experiment:
     execute: Stage | None = execute_stage
     analyse: Stage | None = analyse_stage
     report: Stage | None = report_stage
+    # the units as a given list (see from_units), or None for the product
+    unit_list: Sequence[Unit] | None = None
     # set only by `sharded`, so not __init__ arguments: `shard` is (i, n),
     # and `whole` is the unsharded sink, beside which the shards share one
     # calibration
@@ -356,6 +365,8 @@ class Experiment:
         self.out = Path(self.out)
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.backend.identity()             # refuse an unidentified backend now
+        if self.unit_list is not None:
+            self.unit_list = self._checked_units(self.unit_list)
         if not self.cells or not self.task.items:
             raise ValueError("an experiment needs at least one cell and one item")
         if self.metric is not None and self.analyses is not None:
@@ -390,7 +401,54 @@ class Experiment:
             raise ValueError(f"{n} of {len(all_units)} requests cannot be "
                              f"served{more}, e.g. unit {ids[0]}: {problem}")
 
+    @classmethod
+    def from_units(cls, task: Task, backend: Backend, units: Sequence[Unit],
+                   out: str | Path, **kw: Any) -> Experiment:
+        """An experiment over exactly `units`, in the order given.  `cells`
+        are the units' distinct cells (by id, first occurrence), and each
+        unit's repeat is its own.  Every unit's item must be one of the
+        task's items, and no unit may appear twice.  Other keyword
+        arguments are the Experiment's (options, metric, stages, ...),
+        except `repeats`, which the units carry."""
+        us = list(units)
+        cells = list({u.cell.id: u.cell for u in us}.values())
+        return cls(task=task, backend=backend, cells=cells, out=out,
+                   unit_list=us, **kw)
+
+    def _checked_units(self, given: Sequence[Unit]) -> list[Unit]:
+        """The given units, refused if empty, duplicated, outside the task
+        or inconsistent with `cells`, and tagged with the task's name and
+        version as `Task.units` tags them (tags are not in a unit's id)."""
+        us = list(given)
+        if not us:
+            raise ValueError("unit_list is empty")
+        if self.repeats != 1:
+            raise ValueError(f"repeats={self.repeats} with a unit_list: each "
+                             f"unit carries its own repeat")
+        seen: set[str] = set()
+        for u in us:
+            if u.id in seen:
+                raise ValueError(f"unit_list: unit {u.id} (item "
+                                 f"{u.item.item_id!r}, repeat {u.repeat}) "
+                                 f"appears twice")
+            seen.add(u.id)
+        items = {it.item_id: it for it in self.task.items}
+        foreign = [u for u in us if items.get(u.item.item_id) != u.item]
+        if foreign:
+            raise ValueError(f"unit_list: {len(foreign)} unit(s) have an item "
+                             f"that is not one of task {self.task.name!r}'s "
+                             f"items, e.g. {foreign[0].item.item_id!r}")
+        ids = list(dict.fromkeys(u.cell.id for u in us))
+        if [c.id for c in self.cells] != ids:
+            raise ValueError("unit_list: cells must be the units' distinct "
+                             "cells in order of first use (from_units sets "
+                             "them)")
+        return [Unit(self.task.tagged([u.cell])[0], u.item, u.repeat)
+                for u in us]
+
     def units(self) -> list[Unit]:
+        if self.unit_list is not None:
+            return list(self.unit_list)
         return self.task.units(self.cells, self.repeats)
 
     def planned(self) -> list[Unit]:
@@ -502,11 +560,14 @@ class Experiment:
         return self.out.with_name(f"{self.out.name}.{name}")
 
     def describe(self) -> dict[str, Any]:
-        return {"task": self.task.name, "task_version": self.task.version,
-                "n_items": len(self.task.items), "repeats": self.repeats,
-                "cells": [dict(c.params) for c in self.cells],
-                "backend": self.backend.identity(),
-                "analyses": sorted(self.all_analyses())}
+        d = {"task": self.task.name, "task_version": self.task.version,
+             "n_items": len(self.task.items), "repeats": self.repeats,
+             "cells": [dict(c.params) for c in self.cells],
+             "backend": self.backend.identity(),
+             "analyses": sorted(self.all_analyses())}
+        if self.unit_list is not None:
+            d["n_units"] = len(self.unit_list)
+        return d
 
     def job_hash(self) -> str:
         """Content address of the job: what the run is, not how it is run.
@@ -525,7 +586,10 @@ class Experiment:
         batch size (see `batch_size_for`).  limit enters because it changes
         which units are planned.  Workers, retries, caching and the code commit
         do not: they change how a result is obtained, not what it is (the
-        commit is recorded in the marker)."""
+        commit is recorded in the marker).  A `unit_list` adds the digest
+        of its sorted unit ids (absent otherwise, so other hashes are
+        unchanged): two items rendering the same request are one key but
+        two units."""
         o = self.options
         keys = sorted(request_key(rendered(self.task.render, u), u.repeat,
                                   self.backend)
@@ -538,6 +602,8 @@ class Experiment:
             "repeats": self.repeats, "backend": self.backend.identity(),
             "batch_size": o.batch_size, "limit": o.limit,
             "requests": digest(keys)}
+        if self.unit_list is not None:
+            job["units"] = digest(sorted(u.id for u in self.planned()))
         if self.shard is not None:        # unsharded hashes stay as they were
             job["shard"] = list(self.shard)
         return digest(job)
