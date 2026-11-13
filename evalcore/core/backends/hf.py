@@ -93,7 +93,36 @@ class HFBackend(Backend):
     and K enter `identity()`, and why `n_prefix_reused` in meta records the
     split of every row.  Two cases are refused rather than worked around:
     batch size > 1, and `target` requests (teacher forcing does not reuse
-    prefixes)."""
+    prefixes).
+
+    Sampling.  At temperature T > 0 each row draws from its own generator,
+    never from torch's global one, so a row's sample is the same alone, in
+    any batch, in any order and in any shard.  generate() runs greedy
+    (do_sample=False) over the scores
+
+        s_v = z_v / T + g_v,    g_v = -log(E_v),   E_v ~ Exp(1) iid,
+
+    where z are the logits after generate()'s own processors (the
+    repetition penalty).  -log E is a standard Gumbel variable, and for
+    Gumbel noise P(argmax_v s_v = k) = exp(z_k/T) / sum_v exp(z_v/T)
+    (the Gumbel-max theorem), so the argmax is an exact draw from
+    softmax(z/T).  Each step draws one vector of V values per row from that
+    row's generator, so row r's t-th draw does not depend on the other rows
+    in its batch.  The generator is seeded by `sample_seed(req)`, a digest
+    of the request (messages and params) and its repeat index: two requests
+    with one request key draw the same sample, and repeats draw different
+    ones.  A row's text can still move between batch shapes at the
+    rounding level, as a greedy row's can, when two noised scores tie to
+    within float error.
+
+    With do_sample=False, generate() applies none of its sampling warpers,
+    so a checkpoint's own top_k / top_p / min_p (Qwen2.5-Instruct ships
+    top_k 20, top_p 0.8 in generation_config) never reach a sampled row:
+    the distribution is softmax(z/T), as the request's params say.  Sampled
+    rows made before this scheme drew from the global generator under those
+    warpers.  `key_context` therefore marks a sampled request's key
+    ({"sampler": "row-gumbel"}), so an old sampled row is a cache miss and
+    is redrawn.  Greedy and scoring keys are unchanged."""
 
     name = "hf"
     supports_target = True
@@ -202,6 +231,29 @@ class HFBackend(Backend):
         batch_size == 1.  Without this override the base class would raise
         NotImplementedError and every unit would become an error row."""
         return self.complete_batch([req])[0]
+
+    def _sampled(self, req: Request) -> bool:
+        """Whether `req` is a sampled generation: generate on, a plain
+        prompt (no target, no candidates) and temperature > 0."""
+        if not self.generate or req.target is not None \
+                or req.candidates is not None:
+            return False
+        p = merge_params(self.default_params, req.params)
+        return bool(p.get("temperature", 0.0) > 0)
+
+    def key_context(self, req: Request) -> dict[str, Any] | None:
+        """A sampled request is drawn by the per-row sampler (class
+        docstring, "Sampling"), so its key says so.  Every other request
+        keeps the key it had."""
+        return {"sampler": "row-gumbel"} if self._sampled(req) else None
+
+    @staticmethod
+    def sample_seed(req: Request) -> int:
+        """The seed of `req`'s generator: 63 bits of
+        digest(request.cache_key, repeat).  A function of the request and
+        its repeat alone, so neither the batch nor the shard moves it."""
+        return int(digest({"request": req.cache_key, "repeat": req.repeat},
+                          n=8), 16) >> 1
 
     def _device(self) -> Any:
         """Where inputs go: `device` if given, else wherever the model
@@ -710,11 +762,19 @@ class HFBackend(Backend):
                 # logits: a greedy decode that disagrees with the model's own
                 # logits and with any other harness scoring the same items.
                 # generate() is a transformers method, unknown to torch's types
+                # sampled rows: greedy over z/T + Gumbel noise from each
+                # row's own generator (class docstring, "Sampling")
+                temperature = float(p.get("temperature", 0.0))
+                seeds = ([self.sample_seed(r) for r in reqs]
+                         if temperature > 0 else None)
+                extra: dict[str, Any] = (
+                    {"logits_processor": _row_gumbel(seeds, temperature)}
+                    if seeds is not None else {})
                 gen = cast(Any, self.model).generate(
-                    **fed, max_new_tokens=budget,
-                    do_sample=p.get("temperature", 0.0) > 0,
-                    temperature=p.get("temperature", 1.0) or 1.0,
-                    repetition_penalty=p.get("repetition_penalty", 1.0))
+                    **fed, max_new_tokens=budget, do_sample=False,
+                    temperature=1.0,
+                    repetition_penalty=p.get("repetition_penalty", 1.0),
+                    **extra)
                 new = gen[:, enc["input_ids"].shape[1]:]
                 texts = [t for t in self.tok.batch_decode(
                     new, skip_special_tokens=True)]
@@ -734,14 +794,49 @@ class HFBackend(Backend):
                 out = self.model(**fed, output_attentions=self.output_attentions)
                 texts = [None] * len(reqs)
                 cut = [False] * len(reqs)
+                seeds = None
             probed.out = out
         dt = time.perf_counter() - t0
         extras = probed.extras
+        seed_meta: list[dict[str, Any]] = (
+            [{"sample_seed": sd} for sd in seeds] if seeds is not None
+            else [{} for _ in reqs])
         return [Response(r.unit_id, text=t,
                          meta={**e, "latency_s": dt / len(reqs), "backend": "hf",
-                               "truncated": c,
+                               "truncated": c, **sm,
                                **self._reuse_meta(n_reused, slot)})
-                for r, t, e, c in zip(reqs, texts, extras, cut, strict=True)]
+                for r, t, e, c, sm in zip(reqs, texts, extras, cut, seed_meta,
+                                          strict=True)]
+
+
+def _row_gumbel(seeds: Sequence[int], temperature: float) -> Any:
+    """A LogitsProcessorList whose one processor returns, for row r,
+    scores_r / T - log(E_r), with E_r ~ Exp(1) drawn from row r's own CPU
+    generator (seeded `seeds[r]`), one vector of V values per step.  Greedy
+    decoding over these scores samples softmax(scores / T) (HFBackend
+    docstring, "Sampling").  E is clamped to the smallest normal float32,
+    since E = 0 would give an infinite score; a token already at -inf (a
+    processor masked it) stays at -inf."""
+    import torch
+    from transformers import LogitsProcessor, LogitsProcessorList
+
+    gens = [torch.Generator(device="cpu").manual_seed(int(sd)) for sd in seeds]
+    tiny = torch.finfo(torch.float32).tiny
+
+    class RowGumbel(LogitsProcessor):
+        def __call__(self, input_ids: torch.LongTensor,
+                     scores: torch.FloatTensor) -> torch.FloatTensor:
+            if scores.shape[0] != len(gens):
+                raise AssertionError(f"internal: {scores.shape[0]} score rows "
+                                     f"for {len(gens)} row generators")
+            v = scores.shape[-1]
+            e = torch.stack([torch.empty(v, dtype=torch.float32)
+                             .exponential_(generator=g) for g in gens])
+            noise = -torch.log(e.clamp_min(tiny))
+            return cast(torch.FloatTensor, scores / temperature
+                        + noise.to(device=scores.device, dtype=scores.dtype))
+
+    return LogitsProcessorList([RowGumbel()])
 
 
 def _crop(cache: Any, n: int) -> None:

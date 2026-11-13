@@ -134,22 +134,39 @@ def test_a_refused_decode_param_fails_only_its_own_request(generate):
 
 
 def test_a9_generate_keys_are_what_generate_receives():
-    """A9. Expected kwargs are hand-written: each GENERATE_KEY maps to the
-    generate() kwarg below, and the value set in the request must arrive
-    there unchanged."""
-    to_kwarg = {"max_tokens": "max_new_tokens", "temperature": "temperature",
+    """A9. Expected kwargs are hand-written: max_tokens and
+    repetition_penalty map to the generate() kwargs below and arrive
+    unchanged.  temperature reaches the per-row sampler, not generate():
+    generate() runs greedy, and the sampler's scores for logits z are
+    z / T + noise.  The same request twice gets the same seed, so the noise
+    cancels in proc_1(z) - proc_2(0), which must be z / 0.7 (hand-computed
+    below), whatever the noise is."""
+    to_kwarg = {"max_tokens": "max_new_tokens",
                 "repetition_penalty": "repetition_penalty"}
-    assert set(to_kwarg) == HFBackend.GENERATE_KEYS
+    assert set(to_kwarg) | {"temperature"} == HFBackend.GENERATE_KEYS
     tok = CharTok()
     model = Recorder(len(tok.vocab))
     be = HFBackend(model, tok, device="cpu", generate=True)
     p = {"max_tokens": 3, "temperature": 0.7, "repetition_penalty": 1.3}
-    r = be.complete(user("u", "ab", p))
-    assert r.ok, r.error
-    (kw,) = model.generate_calls
+    for _ in range(2):
+        r = be.complete(user("u", "ab", p))
+        assert r.ok, r.error
+    kw1, kw2 = model.generate_calls
     for key, kwarg in to_kwarg.items():
-        assert kw[kwarg] == p[key], key
-    assert kw["do_sample"] is True                     # temperature 0.7 > 0
+        assert kw1[kwarg] == p[key], key
+    assert kw1["do_sample"] is False and kw1["temperature"] == 1.0
+    z = torch.tensor([[0.0, 0.7, -1.4, 2.1]])
+    ids = torch.zeros((1, 2), dtype=torch.long)
+    diff = (kw1["logits_processor"](ids, z)
+            - kw2["logits_processor"](ids, torch.zeros_like(z)))
+    assert torch.allclose(diff, torch.tensor([[0.0, 1.0, -2.0, 3.0]]),
+                          atol=1e-6)
+
+    greedy = HFBackend(Recorder(len(tok.vocab)), tok, device="cpu",
+                       generate=True)
+    assert greedy.complete(user("g", "ab", {**p, "temperature": 0.0})).ok
+    (kw,) = greedy.model.generate_calls
+    assert kw["do_sample"] is False and "logits_processor" not in kw
 
 
 # --- generation bookkeeping ------------------------------------------------------
